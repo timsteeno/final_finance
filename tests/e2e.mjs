@@ -147,7 +147,7 @@ async function waitToast(re, timeout = 10_000) {
   return toast();
 }
 async function selectByName(name) {
-  await S((n) => { const i = window.__obr.state.items.findIndex((x) => x.name === n); document.querySelectorAll('#queue-list .qitem')[i].click(); }, name);
+  await S((n) => { const i = window.__obr.state.items.findIndex((x) => x.name === n); document.querySelectorAll('#queue-list .qitem .qsel')[i].click(); }, name);
 }
 async function drag(from, to, steps = 12) {
   await page.mouse.move(from.x, from.y);
@@ -232,7 +232,7 @@ await check('upload button / dropzone open a file chooser', async () => {
 await check('URL load: 404 URL shows error toast', async () => {
   await page.fill('#url-input', base + 'samples/does-not-exist.jpg');
   await page.click('#url-form button');
-  const t = await waitToast(/couldn't load/);
+  const t = await waitToast(/HTTP 404/);
   assert(t.error, 'toast should be error-styled');
   assert(await page.isVisible('#landing'), 'still on landing');
   await hideToast();
@@ -241,14 +241,15 @@ await check('URL load: 404 URL shows error toast', async () => {
 await check('URL load: unreachable host shows error toast', async () => {
   await page.fill('#url-input', 'http://localhost:1/nope.png');
   await page.click('#url-form button');
-  await waitToast(/couldn't load/);
+  await waitToast(/couldn't download/);
+  assert(await page.textContent('#url-form button') === 'Load', 'Load button label restored');
   await hideToast();
 });
 
 await check('URL load: non-image URL shows "not an image" toast', async () => {
   await page.fill('#url-input', base + 'README.md');
   await page.click('#url-form button');
-  await waitToast(/not an image/);
+  await waitToast(/isn't an image/);
   assert(await page.isVisible('#landing'), 'still on landing');
   await hideToast();
 });
@@ -402,7 +403,10 @@ await check('crop to subject: padding 0 matches subject bbox and is smaller than
   await setRange('#crop-pad', 10);
   const r2 = await exportActive([[0, 0]]);
   const pad = Math.round(Math.max(bbox.w, bbox.h) * 0.1);
-  assert(r2.w === bbox.w + 2 * pad && r2.h === bbox.h + 2 * pad, `padded dims ${r2.w}x${r2.h}`);
+  const W = 512, H = 512;
+  const ew = bbox.w + (bbox.x <= 1 ? 0 : pad) + (bbox.x + bbox.w >= W - 1 ? 0 : pad);
+  const eh = bbox.h + (bbox.y <= 1 ? 0 : pad) + (bbox.y + bbox.h >= H - 1 ? 0 : pad);
+  assert(r2.w === ew && r2.h === eh, `padded dims ${r2.w}x${r2.h}, expected ${ew}x${eh} (no margin on cut-off edges)`);
   await page.uncheck('#crop-on');
   await setRange('#crop-pad', 5);
   return `bbox ${bbox.w}x${bbox.h}@${bbox.x},${bbox.y}; pad10 -> ${r2.w}x${r2.h}`;
@@ -438,7 +442,8 @@ await check('restore brush brings back alpha with original colours', async () =>
   const after = await S(() => window.__t.alphaIn(10, 10, 80, 20));
   assert(after > before + 80 * 20 * 50, `alpha in corner ${before} -> ${after}`);
   const rgbMatch = await S(() => { const it = window.__obr.state.active; const o = it.getOrigData().data, d = it.cutout.data; const i = (20 * it.width + 50) * 4; return [d[i] === o[i] && d[i + 1] === o[i + 1] && d[i + 2] === o[i + 2], d[i + 3]]; });
-  assert(rgbMatch[0] && rgbMatch[1] === 255, 'restored pixel should be original colour & opaque: ' + rgbMatch);
+  const changed = await S(() => { const it = window.__obr.state.active, d = it.cutout.data; let x0 = 1e9, y0 = 1e9, x1 = -1, y1 = -1; for (let y = 0; y < 120; y++) for (let x = 0; x < 200; x++) if (d[(y * it.width + x) * 4 + 3] > 0) { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); } return [x0, y0, x1, y1]; });
+  assert(rgbMatch[0] && rgbMatch[1] === 255, 'restored pixel (50,20) should be original colour & opaque: ' + rgbMatch + '; restored bbox in TL area ' + changed + '; client pts ' + JSON.stringify([a, b]));
   assert((await activeInfo()).undo === 2, 'two undo steps');
   return `corner alpha ${before} -> ${after}`;
 });
@@ -526,14 +531,18 @@ await check('Original / Removed view tabs', async () => {
 });
 
 await check('zoom buttons, label, and wheel zoom', async () => {
+  const lbl = async () => [await page.textContent('#zoom-fit'), Math.round(await S(() => window.__obr.viewer.displayScale()) * 100) + '%'];
+  await page.click('#zoom-fit');
+  const fitLbl = await lbl();
+  assert(fitLbl[0] === fitLbl[1], 'fit label ' + fitLbl);
   await page.click('#zoom-in');
   approx(await S(() => window.__obr.viewer.zoom), 1.25, 1e-9, 'zoom in');
-  assert((await page.textContent('#zoom-fit')) === '125%', 'label ' + await page.textContent('#zoom-fit'));
+  let l = await lbl(); assert(l[0] === l[1] && l[0] !== fitLbl[0], 'label after zoom in ' + l);
   await page.click('#zoom-out'); await page.click('#zoom-out');
   approx(await S(() => window.__obr.viewer.zoom), 0.8, 1e-9, 'zoom out');
-  assert((await page.textContent('#zoom-fit')) === '80%', 'label 80%');
+  l = await lbl(); assert(l[0] === l[1], 'label after zoom out ' + l);
   await page.click('#zoom-fit');
-  assert((await page.textContent('#zoom-fit')) === '100%', 'label 100%');
+  assert((await page.textContent('#zoom-fit')) === fitLbl[0], 'label back to fit');
   const b = await page.locator('#view-canvas').boundingBox();
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
   await page.mouse.wheel(0, -300);
@@ -545,6 +554,7 @@ await check('zoom buttons, label, and wheel zoom', async () => {
 
 await check('keyboard shortcuts: E R H [ ] C O + - 0', async () => {
   await blurFocus();
+  await S(() => window.__obr.viewer.resetView());
   const v = () => S(() => { const x = window.__obr.viewer; return { tool: x.tool, size: x.brushSize, compare: x.compare, view: x.view, zoom: x.zoom }; });
   await page.keyboard.press('e'); assert((await v()).tool === 'erase', 'E');
   assert(await S(() => document.querySelector('.tools [data-tool="erase"]').classList.contains('on')), 'erase button marked');
@@ -561,13 +571,30 @@ await check('keyboard shortcuts: E R H [ ] C O + - 0', async () => {
   await page.keyboard.press('+'); approx((await v()).zoom, 1.25, 1e-9, '+');
   await page.keyboard.press('-'); await page.keyboard.press('-'); approx((await v()).zoom, 0.8, 1e-9, '-');
   await page.keyboard.press('0'); approx((await v()).zoom, 1, 1e-9, '0');
-  assert((await page.textContent('#zoom-fit')) === '100%', 'zoom label after 0 key: ' + await page.textContent('#zoom-fit'));
+  await page.keyboard.press('c'); assert((await v()).compare === true, 'C on again');
+  await page.keyboard.press('e'); await page.keyboard.press('Escape');
+  const ve = await v(); assert(ve.compare === false && ve.tool === 'pan', 'Escape leaves compare/brush: ' + JSON.stringify(ve));
 });
 
 await check('keyboard: Ctrl+S downloads', async () => {
   await blurFocus();
   const r = await download(() => page.keyboard.press('Control+s'));
   assert(r.name === 'astronaut-no-bg.png', r.name);
+});
+
+await check('sticky quick Download button downloads', async () => {
+  assert(await page.isEnabled('#quick-dl-btn'), 'enabled');
+  const r = await download(() => page.click('#quick-dl-btn'));
+  assert(r.name === 'astronaut-no-bg.png', r.name);
+});
+
+await check('canvas keyboard: arrows pan the view when canvas focused', async () => {
+  await page.focus('#view-canvas');
+  await page.keyboard.press('ArrowLeft');
+  await page.keyboard.press('ArrowUp');
+  const v = await S(() => ({ x: window.__obr.viewer.panX, y: window.__obr.viewer.panY }));
+  assert(v.x === 30 && v.y === 30, 'pan ' + JSON.stringify(v));
+  await page.click('#zoom-fit');
 });
 
 await check('shortcuts ignored while typing in an input', async () => {
@@ -593,7 +620,7 @@ await check('batch via "+ Add" file chooser (2 samples), processed sequentially'
   assert(its.map((i) => i.name).join() === 'astronaut.jpg,chelsea.jpg,coffee.jpg', 'names ' + its.map((i) => i.name));
   assert(maxProc <= 1, 'max concurrent processing ' + maxProc);
   assert(await page.$$eval('#queue-list .qitem', (q) => q.length) === 3, 'queue DOM count');
-  assert(await page.textContent('#zip-btn') === 'ZIP all (3)', 'zip label ' + await page.textContent('#zip-btn'));
+  assert(await page.textContent('#zip-btn') === 'ZIP (3)', 'zip label ' + await page.textContent('#zip-btn'));
   assert((await page.$$eval('#queue-list .badge.done', (q) => q.length)) === 3, 'done badges');
   const act = await activeInfo();
   return `active stays ${act.name}`;
@@ -614,7 +641,11 @@ await check('clicking a queue thumbnail selects it', async () => {
   await selectByName('chelsea.jpg');
   const a = await activeInfo();
   assert(a.name === 'chelsea.jpg', a.name);
-  assert(await S(() => document.querySelector('#queue-list .qitem.active').getAttribute('aria-label')).then((l) => /chelsea/.test(l)), 'active class');
+  assert(/chelsea/.test(await S(() => document.querySelector('#queue-list .qitem.active .qsel').getAttribute('aria-label'))), 'active class');
+  assert(await S(() => document.querySelector('#queue-list .qitem.active .qsel').getAttribute('aria-current')) === 'true', 'aria-current');
+  await page.click('#queue-list .qitem:nth-child(1) .qsel');
+  assert((await activeInfo()).name === 'astronaut.jpg', 'mouse click selects first');
+  await selectByName('chelsea.jpg');
   assert(/451×300/.test(await page.textContent('#stage-info')), 'stage info dims');
 });
 
@@ -713,6 +744,7 @@ await check('apply settings to all copies bg/shadow/crop', async () => {
   await selectByName('chelsea.jpg');
   await page.click('.bg-types [data-bg="color"]');
   await page.click('.swatch[data-color="#000000"]');
+  await openSect('sect-advanced');
   await page.click('#apply-all-btn');
   await waitToast(/applied/);
   const types = await S(() => window.__obr.state.items.map((i) => i.settings.bg.type + ':' + i.settings.bg.color));
@@ -729,7 +761,7 @@ await check('ZIP all: valid store-only zip, one PNG per done item, unique names,
   await page.selectOption('#fmt-select', 'png');
   const its = await items();
   const done = its.filter((i) => i.status === 'done');
-  assert(await page.textContent('#zip-btn') === `ZIP all (${done.length})`, 'zip label');
+  assert(await page.textContent('#zip-btn') === `ZIP (${done.length})`, 'zip label ' + await page.textContent('#zip-btn'));
   const { name, buf } = await download(() => page.click('#zip-btn'), 120_000);
   assert(name === 'background-removed.zip', name);
   assert(buf.readUInt32LE(0) === 0x04034b50, 'local header signature at 0');
@@ -747,7 +779,7 @@ await check('ZIP all: valid store-only zip, one PNG per done item, unique names,
   const d = pngDims(ast.data);
   assert(d.w === 512 && d.h === 512, 'astronaut dims in zip');
   await page.waitForFunction(() => !document.getElementById('zip-btn').disabled);
-  assert(/^ZIP all/.test(await page.textContent('#zip-btn')), 'zip button label restored');
+  assert(/^ZIP (all|\(\d+\))$/.test(await page.textContent('#zip-btn')), 'zip button label restored: ' + await page.textContent('#zip-btn'));
   return names.join(', ');
 });
 
@@ -773,7 +805,9 @@ await check('remove ACTIVE item: next item becomes active and viewer follows (no
   const errs = logs.filter((l) => l.startsWith('[pageerror]')).slice(errs0);
   await shot('06-after-remove-active');
   assert(st.active && st.active !== 'astronaut.jpg', 'new active ' + st.active);
-  assert(st.same, `viewer.item (${st.viewerItem}) !== state.active (${st.active})`);
+  // Is the stage actually showing the new active item? sample canvas centre.
+  const blank = await S(() => { const c = document.getElementById('view-canvas'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data; let n = 0; for (let i = 3; i < d.length; i += 4 * 97) if (d[i] > 0) n++; return n === 0; });
+  assert(st.same, `viewer.item (${st.viewerItem}) !== state.active (${st.active}); stage canvas blank=${blank}`);
   assert(errs.length === 0, 'page errors: ' + errs.join(' | '));
 });
 
@@ -807,6 +841,24 @@ await check('large image export sizes (2048 / 1024 / 625 jpg, full png)', async 
   assert(r.w === it.w && r.h === it.h, `full ${r.w}x${r.h} vs ${it.w}x${it.h}`);
   out.push(`full=${r.w}x${r.h} (${(r.buf.length / 1e6).toFixed(1)}MB)`);
   return out.join(' ');
+});
+
+await check('cancel a running job (overlay Cancel) drops item and engine recovers', async () => {
+  await page.selectOption('#model-select', 'balanced');
+  await hideToast();
+  const n0 = (await items()).length;
+  await S(async (u) => { const b = await (await fetch(u)).blob(); await window.__obr.addFiles([new File([b], 'cancel-me.jpg', { type: 'image/jpeg' })]); }, base + 'samples/chelsea.jpg');
+  await selectByName('cancel-me.jpg');
+  await page.waitForFunction(() => window.__obr.state.active.status === 'processing', null, { timeout: 10000 });
+  await page.waitForSelector('#overlay-actions button', { timeout: 5000 });
+  await page.click('#overlay-actions button:has-text("Cancel")');
+  await page.waitForFunction((n) => window.__obr.state.items.length === n, n0, { timeout: 5000 });
+  assert(!(await items()).some((i) => i.name === 'cancel-me.jpg'), 'cancelled item removed');
+  assert(await S(() => window.__obr.state.busy) === false, 'not busy');
+  await page.selectOption('#model-select', 'fast');
+  await S(async (u) => { const b = await (await fetch(u)).blob(); await window.__obr.addFiles([new File([b], 'after-cancel.jpg', { type: 'image/jpeg' })]); }, base + 'samples/chelsea_thumb.jpg');
+  const r = await waitItem('after-cancel.jpg');
+  assert(r.status === 'done', 'processing after cancel: ' + JSON.stringify(r));
 });
 
 // ---------------------------------------------------------------- models & advanced
@@ -901,6 +953,11 @@ await check('preferences persist across reload (model/format/device/refine)', as
 });
 
 await check('removing every item returns to landing', async () => {
+  // state was reset by the reload above: add two items again
+  await page.click('.sample[data-src="samples/coffee.jpg"]');
+  await page.waitForFunction(() => window.__obr.state.items.length === 1);
+  await page.setInputFiles('#file-input', path.join(root, 'samples/chelsea.jpg'));
+  await page.waitForFunction(() => window.__obr.state.items.length === 2);
   await waitAllSettled();
   while ((await items()).length) {
     const st = (await items())[0].status;

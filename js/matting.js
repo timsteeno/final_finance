@@ -34,9 +34,10 @@ function boxBlur(src, w, h, r, out, tmp) {
 
 // rgba: Uint8ClampedArray (w*h*4), modified in place (RGB only).
 // alpha: Uint8ClampedArray (w*h).
-export function estimateForeground(rgba, alpha, w, h, bigR = 90, smallR = 6) {
+// bigR/smallR are blur radii (the paper's kernel sizes 90/6 halved).
+export function estimateForeground(rgba, alpha, w, h, bigR = 45, smallR = 3) {
   // ---- Pass 1: large radius on a downscaled image ----
-  const k = Math.max(1, Math.round(bigR / 12));
+  const k = Math.max(1, Math.round(bigR / 8));
   const lw = Math.max(1, Math.ceil(w / k)), lh = Math.max(1, Math.ceil(h / k));
   const ln = lw * lh;
   const la = new Float32Array(ln);
@@ -89,6 +90,9 @@ export function estimateForeground(rgba, alpha, w, h, bigR = 90, smallR = 6) {
   };
 
   // ---- Pass 2: small radius, full resolution, tiled ----
+  // rgba is overwritten tile by tile, so read the original colours from a copy
+  // (otherwise tile margins see already-corrected pixels and leave seams).
+  const src = new Uint8ClampedArray(rgba);
   const T = 512, m = smallR + 1;
   const maxTW = T + 2 * m, maxN = maxTW * maxTW;
   const ta = new Float32Array(maxN), tba = new Float32Array(maxN);
@@ -120,7 +124,7 @@ export function estimateForeground(rgba, alpha, w, h, bigR = 90, smallR = 6) {
           const a = alpha[gi] / 255;
           ta[i] = a;
           for (let c = 0; c < 3; c++) {
-            const I = rgba[gi * 4 + c] / 255;
+            const I = src[gi * 4 + c] / 255;
             const f = sample(bF[c], gx, gy), b = sample(bB[c], gx, gy);
             let F1 = f + a * (I - a * f - (1 - a) * b);
             F1 = F1 < 0 ? 0 : F1 > 1 ? 1 : F1;
@@ -151,7 +155,7 @@ export function estimateForeground(rgba, alpha, w, h, bigR = 90, smallR = 6) {
           const a = a8 / 255;
           const i = (y - y0) * bw + (x - x0);
           for (let c = 0; c < 3; c++) {
-            const I = rgba[gi * 4 + c] / 255;
+            const I = src[gi * 4 + c] / 255;
             const f = tbF[c][i], b = tB[c][i];
             let F = f + a * (I - a * f - (1 - a) * b);
             F = F < 0 ? 0 : F > 1 ? 1 : F;

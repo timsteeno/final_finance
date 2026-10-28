@@ -56,7 +56,7 @@ after every meaningful step and commit it.
 - [x] Mobile-friendly responsive layout, dark mode
 - [x] Keyboard shortcuts
 - [x] README with self-hosting instructions + licenses
-- [~] Automated Playwright tests (tests/) — smoke.mjs exists; full suite pending
+- [x] Automated Playwright tests: tests/smoke.mjs, tests/e2e.mjs (56 checks; ONLY_FAST=1 skips Best), tests/quality/* (model/matting analysis tools)
 
 ## Iteration log
 - 2026-10-28: Investigated sandbox network, picked models, verified ISNet
@@ -79,3 +79,11 @@ createRequire, see tests/smoke.mjs).
   Pending: E2E agent report, quality agent report. Remaining UX ideas not yet
   done: mobile bottom tool tray for brushing, drag/scale photo backgrounds,
   aspect-ratio canvas presets, gradient backgrounds.
+- 2026-10-28: Quality agent: models verified against Python reference (MAD
+  <1.2/255 for ISNet). Fixed tile-seam bug in matting.js; added guided-filter
+  upsampling + contrast curve (js/upscale.js) when "Clean edge colors" is on;
+  blur radii now 45/3. E2E agent: 56-check suite; fixed removing the active
+  item leaving the viewer on a closed bitmap. e2e passes 55/55 (ONLY_FAST).
+- NEXT ideas: small-island removal for Fast model; mobile bottom tool tray;
+  drag/scale photo backgrounds; aspect-ratio canvas presets; gradient bgs;
+  brush size in image px option; second round of agent testing.

@@ -286,8 +286,10 @@ function dropItem(item) {
   state.items.splice(idx, 1);
   item.original?.close?.();
   if (state.active === item) {
-    state.active = state.items[Math.min(idx, state.items.length - 1)] || null;
-    if (!state.active) { showLanding(); return; }
+    const next = state.items[Math.min(idx, state.items.length - 1)] || null;
+    if (!next) { state.active = null; showLanding(); return; }
+    selectItem(next);
+    return;
   }
   renderQueue();
   refreshAll();

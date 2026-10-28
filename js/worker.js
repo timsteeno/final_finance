@@ -3,6 +3,7 @@
 import * as ort from '../vendor/ort/ort.webgpu.min.mjs';
 import { MODELS } from './models.js';
 import { estimateForeground } from './matting.js';
+import { guidedUpscale } from './upscale.js';
 
 const BASE = new URL('../', import.meta.url).href;
 const CACHE_NAME = 'obr-models-v1';
@@ -148,7 +149,8 @@ function preprocess(bitmap, def) {
       out[j + 2 * n] = (px[i + 2] / mx - m[2]) / sd[2];
     }
   }
-  return out;
+  // px is kept as the guide image for mask upsampling
+  return { input: out, px };
 }
 
 function toMask8(data, def) {
@@ -192,7 +194,7 @@ async function run({ id, model, device, bitmap, refine }) {
   post({ type: 'status', id, stage: 'loading-model' });
   let { session, backend } = await getSession(model, device);
   post({ type: 'status', id, stage: 'inference', backend });
-  const input = preprocess(bitmap, def);
+  const { input, px } = preprocess(bitmap, def);
   const tensor = new ort.Tensor('float32', input, [1, 3, def.size, def.size]);
   let results;
   try {
@@ -213,13 +215,17 @@ async function run({ id, model, device, bitmap, refine }) {
 
   post({ type: 'status', id, stage: 'refining' });
   const w = bitmap.width, h = bitmap.height;
-  const alpha = upscaleMask(mask, def.size, w, h);
   const c = makeCanvas(w, h);
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
   const img = ctx.getImageData(0, 0, w, h);
   const rgba = img.data;
+  // Edge-aware upsampling guided by the image, plus a contrast curve that
+  // snaps near-opaque / near-clear values; plain bilinear when refine is off.
+  const alpha = refine
+    ? guidedUpscale(mask, def.size, px, rgba, w, h, 2, 1e-4, 0.04, 0.96)
+    : upscaleMask(mask, def.size, w, h);
   if (refine) estimateForeground(rgba, alpha, w, h);
   for (let i = 0, j = 3; i < alpha.length; i++, j += 4) rgba[j] = alpha[i];
   const t2 = performance.now();
