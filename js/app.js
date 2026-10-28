@@ -164,6 +164,57 @@ function thumbOf(item) {
   return c.toDataURL('image/png');
 }
 
+// A finished item whose pixels are in memory (not hibernated).
+function ready(item) {
+  return !!(item && item.status === 'done' && item.cutout && item.original);
+}
+
+// Bring a hibernated / not-yet-decoded item's pixels back into memory.
+function wake(item) {
+  item._hib = null;
+  if (item._waking) return item._waking;
+  if (item.original && (item.cutout || item.status !== 'done')) return Promise.resolve();
+  item._waking = (async () => {
+    if (!item.original) item.original = (await decode(item.file)).bmp;
+    if (item.status === 'done' && !item.cutout && item.cutoutBlob) {
+      const bmp = await createImageBitmap(item.cutoutBlob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      const c = createCanvas(item.width, item.height);
+      const ctx = c.getContext('2d', { willReadFrequently: true });
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close();
+      item.cutout = ctx.getImageData(0, 0, item.width, item.height);
+      item.cutoutCanvas = c;
+    }
+  })().finally(() => { item._waking = null; });
+  return item._waking;
+}
+
+// Free the big buffers of an item that is not being viewed: the cutout is
+// kept as a PNG blob and the original is decoded again from its file.
+async function hibernate(item) {
+  if (item === state.active || item._waking || !item.original) return;
+  if (item.status === 'queued' || item.status === 'error') {
+    item.original.close?.();
+    item.original = null;
+    item.releaseCaches();
+    return;
+  }
+  if (item.status !== 'done' || !item.cutout) return;
+  const token = item._hib = {};
+  if (!item.cutoutBlob) {
+    const c = item.cutoutCanvas;
+    const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+    if (item._hib !== token || !blob) return; // woken (or edited) meanwhile
+    item.cutoutBlob = blob;
+  }
+  if (item._hib !== token || item === state.active || !item.cutoutBlob) return;
+  item._hib = null;
+  item.cutout = null;
+  item.releaseCaches();
+  item.original.close?.();
+  item.original = null;
+}
+
 function isImage(file) {
   return file && (file.type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|avif|svg|heic|heif|tiff?)$/i.test(file.name || ''));
 }
@@ -188,15 +239,18 @@ async function addFiles(files) {
       item.width = bmp.width;
       item.height = bmp.height;
       item.downscaled = downscaled;
+      item.decoded = true;
       item.thumb = thumbOf(item);
+      // Keep only the visible image decoded; others decode again when needed.
+      if (item !== state.active) hibernate(item);
     } catch (err) {
       item.status = 'error';
       item.error = /heic|heif/i.test(item.name) ? 'HEIC is not supported by this browser. Convert to JPG/PNG first.' : 'Could not read this image.';
     }
     renderQueue();
     if (item === state.active) refreshAll();
+    pump();
   }
-  pump();
 }
 
 async function addFromUrl(url) {
@@ -236,7 +290,7 @@ async function addFromUrl(url) {
 // ---------- Processing queue ----------
 async function pump() {
   if (state.busy) return;
-  const next = state.items.find((i) => i.status === 'queued' && i.original);
+  const next = state.items.find((i) => i.status === 'queued' && i.decoded);
   if (!next) return;
   state.busy = true;
   next.status = 'processing';
@@ -246,6 +300,7 @@ async function pump() {
   if (next === state.active) refreshAll();
   try {
     if (engineBroken) throw new Error(engineBroken);
+    await wake(next);
     const clone = await createImageBitmap(next.original);
     if (next.cancelRequested) { const e = new Error('Cancelled'); e.cancelled = true; clone.close(); throw e; }
     const t0 = performance.now();
@@ -256,7 +311,7 @@ async function pump() {
     next.status = 'done';
     next.modelUsed = r.model;
     next.thumb = thumbOf(next);
-    if (next !== state.active) next.releaseCaches();
+    if (next !== state.active) hibernate(next);
   } catch (err) {
     if (err.cancelled) {
       next.status = 'cancelled';
@@ -343,11 +398,23 @@ function dropItem(item) {
 }
 
 function selectItem(item) {
-  if (state.active && state.active !== item) state.active.releaseCaches();
+  const prev = state.active;
   state.active = item;
+  if (prev && prev !== item) {
+    prev.releaseCaches();
+    if (prev.status !== 'processing') hibernate(prev);
+  }
   viewer.setItem(item);
   renderQueue();
   refreshAll();
+  if (item && item.decoded && (!item.original || (item.status === 'done' && !item.cutout))) {
+    wake(item).then(() => {
+      if (state.active !== item) return;
+      viewer.setItem(item);
+      viewer.render();
+      refreshAll();
+    }).catch((err) => toast('Could not reopen this image: ' + err.message, true));
+  }
 }
 
 // ---------- UI: workspace ----------
@@ -366,13 +433,14 @@ function updateOverlay() {
   const ov = $('#stage-overlay');
   const actions = $('#overlay-actions');
   const sub = $('#overlay-sub');
-  if (!item || (item.status !== 'processing' && item.status !== 'queued' && item.status !== 'error')) {
+  const waking = item && item.status === 'done' && !ready(item);
+  if (!item || (!waking && item.status !== 'processing' && item.status !== 'queued' && item.status !== 'error')) {
     ov.hidden = true;
     clearInterval(updateOverlay._timer); updateOverlay._timer = 0;
     return;
   }
   ov.hidden = false;
-  const actionKey = item.id + ':' + item.status;
+  const actionKey = item.id + ':' + item.status + (waking ? ':w' : '');
   if (actions.dataset.key !== actionKey) {
     actions.dataset.key = actionKey;
     actions.textContent = '';
@@ -382,8 +450,10 @@ function updateOverlay() {
       b.addEventListener('click', fn);
       actions.append(b);
     };
-    if (item.status === 'error') {
-      if (item.original) mk('Try again', () => { item.status = 'queued'; item.error = ''; renderQueue(); refreshAll(); pump(); });
+    if (waking) {
+      // no actions while reopening
+    } else if (item.status === 'error') {
+      if (item.decoded) mk('Try again', () => { item.status = 'queued'; item.error = ''; renderQueue(); refreshAll(); pump(); });
       mk('Remove', () => removeItem(item));
       mk('Upload another', () => $('#file-input').click());
     } else {
@@ -405,7 +475,8 @@ function updateOverlay() {
   prog.hidden = true;
   let text = 'Waiting in queue…';
   if (item.status === 'error') text = '⚠ ' + item.error;
-  else if (!item.original) text = 'Reading image…';
+  else if (waking) text = 'Opening…';
+  else if (!item.decoded) text = 'Reading image…';
   else if (item.status === 'processing') {
     if (item.stage === 'loading-model') {
       const running = item.modelRunning || state.model;
@@ -441,7 +512,7 @@ function refreshAll() {
 
 function syncToolbar() {
   const item = state.active;
-  const done = item && item.status === 'done';
+  const done = ready(item);
   $('#view-original').classList.toggle('on', viewer.view === 'original');
   $('#view-result').classList.toggle('on', viewer.view === 'result');
   $('#view-original').setAttribute('aria-pressed', String(viewer.view === 'original'));
@@ -457,12 +528,12 @@ function syncToolbar() {
 
 function syncPanel() {
   const item = state.active;
-  const done = item && item.status === 'done';
+  const done = ready(item);
   $$('.panel button, .panel input, .panel select').forEach((el) => {
     if (el.closest('#sect-advanced') && el.id !== 'reprocess-btn' && el.id !== 'apply-all-btn') return;
     el.disabled = !done;
   });
-  $('#reprocess-btn').disabled = zipping || !item || !item.original || item.status === 'processing' || item.status === 'queued';
+  $('#reprocess-btn').disabled = zipping || !item || !item.decoded || item.status === 'processing' || item.status === 'queued';
   $('#apply-all-btn').disabled = !done || state.items.length < 2;
   $('#fmt-select').value = state.format;
   $('#size-select').value = state.size;
@@ -535,7 +606,7 @@ function settingsChanged({ thumb = true } = {}) {
   if (!item) return;
   viewer.render();
   syncPanel();
-  if (thumb && item.status === 'done') {
+  if (thumb && ready(item)) {
     clearTimeout(settingsChanged._t);
     settingsChanged._t = setTimeout(() => {
       if (item !== state.active || item.status !== 'done') return;
@@ -560,7 +631,7 @@ let downloading = false;
 async function downloadActive() {
   if (downloading) return;
   const item = state.active;
-  if (!item || item.status !== 'done') { if (item) toast('Nothing to download yet — the background is still being removed.'); return; }
+  if (!ready(item)) { if (item) toast('Nothing to download yet — the background is still being removed.'); return; }
   const btn = $('#download-btn');
   downloading = true;
   btn.disabled = true;
@@ -594,10 +665,13 @@ async function downloadZip() {
     for (let i = 0; i < done.length; i++) {
       btn.textContent = `${i + 1}/${done.length}…`;
       // Skip items removed or re-run since the ZIP started.
-      if (done[i].status !== 'done' || !done[i].cutout || !state.items.includes(done[i])) continue;
+      if (done[i].status !== 'done' || !state.items.includes(done[i])) continue;
+      await wake(done[i]);
+      if (!done[i].cutout) continue;
       const blob = await exportBlob(done[i], { format: state.format, size: state.size, quality: state.quality / 100 });
       files.push({ name: outputName(done[i], state.format), data: new Uint8Array(await blob.arrayBuffer()) });
-      if (done[i] !== state.active) done[i].releaseCaches();
+      // Free it again before moving on, so a big batch never sits in memory at once.
+      if (done[i] !== state.active) await hibernate(done[i]);
     }
     if (files.length) {
       saveBlob(makeZip(files), 'background-removed.zip');
@@ -733,7 +807,7 @@ function initPanel() {
   $('#device-select').addEventListener('change', (e) => { state.device = e.target.value; prefs.set('device', state.device); });
   $('#reprocess-btn').addEventListener('click', () => {
     const item = state.active;
-    if (zipping || !item || !item.original || item.status === 'processing') return;
+    if (zipping || !item || !item.decoded || item.status === 'processing') return;
     item.status = 'queued';
     item.cutout = null; item.cutoutCanvas = null;
     item.undoStack = []; item.redoStack = [];
@@ -742,18 +816,26 @@ function initPanel() {
     refreshAll();
     pump();
   });
-  $('#apply-all-btn').addEventListener('click', () => {
+  $('#apply-all-btn').addEventListener('click', async () => {
     const src = state.active.settings;
-    for (const it of state.items) {
-      if (it === state.active) continue;
+    const targets = state.items.filter((it) => it !== state.active);
+    for (const it of targets) {
       it.settings = {
         bg: { ...src.bg }, shadow: { ...src.shadow }, crop: { ...src.crop },
       };
       it._blurCache = null;
-      if (it.status === 'done') { it.thumb = thumbOf(it); it.releaseCaches(); }
     }
-    renderQueue();
     toast('Settings applied to all images.');
+    // Refresh thumbnails one at a time (items may be hibernated).
+    for (const it of targets) {
+      if (it.status !== 'done' || !state.items.includes(it)) continue;
+      try {
+        await wake(it);
+        if (it.cutout && it.original) it.thumb = thumbOf(it);
+      } catch { /* keep old thumb */ }
+      if (it !== state.active) await hibernate(it);
+      renderQueue();
+    }
   });
 }
 
@@ -792,12 +874,12 @@ function initToolbar() {
 function undo() {
   if (viewer.stroking) return;
   const it = state.active;
-  if (it && it.status === 'done' && it.undo()) { viewer.render(); it.thumb = thumbOf(it); renderQueue(); refreshAll(); }
+  if (ready(it) && it.undo()) { viewer.render(); it.thumb = thumbOf(it); renderQueue(); refreshAll(); }
 }
 function redo() {
   if (viewer.stroking) return;
   const it = state.active;
-  if (it && it.status === 'done' && it.redo()) { viewer.render(); it.thumb = thumbOf(it); renderQueue(); refreshAll(); }
+  if (ready(it) && it.redo()) { viewer.render(); it.thumb = thumbOf(it); renderQueue(); refreshAll(); }
 }
 
 function initInputs() {
@@ -856,7 +938,7 @@ function initInputs() {
     if (mod && k === 's') { e.preventDefault(); downloadActive(); return; }
     if (mod || e.altKey) return;
     if (e.key === 'Escape') { if (viewer.compare) $('#compare-btn').click(); setTool('pan'); return; }
-    const done = state.active && state.active.status === 'done';
+    const done = ready(state.active);
     if (k === 'e' && done) setTool('erase');
     else if (k === 'r' && done) setTool('restore');
     else if (k === 'h' || k === 'v') setTool('pan');
