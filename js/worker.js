@@ -190,12 +190,21 @@ async function run({ id, model, device, bitmap, refine }) {
   const def = MODELS[model];
   const t0 = performance.now();
   post({ type: 'status', id, stage: 'loading-model' });
-  const { session, backend } = await getSession(model, device);
+  let { session, backend } = await getSession(model, device);
   post({ type: 'status', id, stage: 'inference', backend });
   const input = preprocess(bitmap, def);
   const tensor = new ort.Tensor('float32', input, [1, 3, def.size, def.size]);
-  const feeds = { [session.inputNames[0]]: tensor };
-  const results = await session.run(feeds, [session.outputNames[0]]);
+  let results;
+  try {
+    results = await session.run({ [session.inputNames[0]]: tensor }, [session.outputNames[0]]);
+  } catch (e) {
+    if (backend !== 'webgpu') throw e;
+    // Some GPUs/drivers fail at run time; retry on the CPU.
+    console.warn('WebGPU inference failed, retrying on WASM', e);
+    ({ session, backend } = await getSession(model, 'cpu'));
+    post({ type: 'status', id, stage: 'inference', backend });
+    results = await session.run({ [session.inputNames[0]]: tensor }, [session.outputNames[0]]);
+  }
   const outT = results[session.outputNames[0]];
   const raw = outT.data instanceof Float32Array ? outT.data : Float32Array.from(outT.data);
   const mask = toMask8(raw, def);

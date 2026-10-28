@@ -372,7 +372,6 @@ function syncPanel() {
 function settingsChanged({ thumb = true } = {}) {
   const item = state.active;
   if (!item) return;
-  item._bboxCache = item._bboxCache; // bbox unaffected by settings
   viewer.render();
   syncPanel();
   if (thumb && item.status === 'done') {
