@@ -455,6 +455,7 @@ function syncPanel() {
   $('#crop-pad').value = s.crop.padding;
   if (done) $('#crop-pad').disabled = !s.crop.enabled;
   $('#crop-pad-out').textContent = s.crop.padding + '%';
+  $('#crop-aspect').value = s.crop.aspect || 'original';
   $$('.tools button').forEach((b) => {
     b.classList.toggle('on', b.dataset.tool === viewer.tool);
     b.setAttribute('aria-checked', String(b.dataset.tool === viewer.tool));
@@ -634,6 +635,7 @@ function initPanel() {
 
   $('#crop-on').addEventListener('change', (e) => { state.active.settings.crop.enabled = e.target.checked; viewer.resetView(); settingsChanged(); });
   $('#crop-pad').addEventListener('input', (e) => { state.active.settings.crop.padding = +e.target.value; settingsChanged(); });
+  $('#crop-aspect').addEventListener('change', (e) => { state.active.settings.crop.aspect = e.target.value; viewer.resetView(); settingsChanged(); });
 
   $('#fmt-select').addEventListener('change', (e) => { state.format = e.target.value; prefs.set('format', state.format); syncPanel(); });
   $('#size-select').addEventListener('change', (e) => { state.size = e.target.value; prefs.set('size', state.size); syncPanel(); });

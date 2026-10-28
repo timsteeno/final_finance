@@ -167,6 +167,60 @@ function toMask8(data, def) {
   return out;
 }
 
+// Remove small disconnected specks: opaque components smaller than 0.5% of
+// the largest one, plus faint haze farther than R px from any kept component.
+function removeIslands(mask, s) {
+  const n = s * s;
+  const label = new Int32Array(n);
+  const stack = new Int32Array(n);
+  const sizes = [0];
+  let cur = 0;
+  for (let i = 0; i < n; i++) {
+    if (mask[i] < 128 || label[i]) continue;
+    cur++;
+    let sp = 0, size = 0;
+    stack[sp++] = i; label[i] = cur;
+    while (sp) {
+      const p = stack[--sp];
+      size++;
+      const x = p % s, y = (p / s) | 0;
+      if (x > 0 && !label[p - 1] && mask[p - 1] >= 128) { label[p - 1] = cur; stack[sp++] = p - 1; }
+      if (x < s - 1 && !label[p + 1] && mask[p + 1] >= 128) { label[p + 1] = cur; stack[sp++] = p + 1; }
+      if (y > 0 && !label[p - s] && mask[p - s] >= 128) { label[p - s] = cur; stack[sp++] = p - s; }
+      if (y < s - 1 && !label[p + s] && mask[p + s] >= 128) { label[p + s] = cur; stack[sp++] = p + s; }
+    }
+    sizes.push(size);
+  }
+  if (cur === 0) return;
+  const largest = Math.max(...sizes);
+  const min = largest * 0.005;
+  // keep[] = 1 for pixels of kept components
+  const keep = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const l = label[i];
+    if (l && sizes[l] >= min) keep[i] = 1;
+    else if (l) mask[i] = 0;
+  }
+  // dilate keep by R (separable max) and clear soft pixels outside it
+  const R = Math.max(2, Math.round(s / 160));
+  const tmp = new Uint8Array(n);
+  for (let y = 0; y < s; y++) {
+    let last = -1e9;
+    const row = y * s;
+    for (let x = 0; x < s; x++) { if (keep[row + x]) last = x; if (x - last <= R) tmp[row + x] = 1; }
+    last = 1e9;
+    for (let x = s - 1; x >= 0; x--) { if (keep[row + x]) last = x; if (last - x <= R) tmp[row + x] = 1; }
+  }
+  const near = new Uint8Array(n);
+  for (let x = 0; x < s; x++) {
+    let last = -1e9;
+    for (let y = 0; y < s; y++) { if (tmp[y * s + x]) last = y; if (y - last <= R) near[y * s + x] = 1; }
+    last = 1e9;
+    for (let y = s - 1; y >= 0; y--) { if (tmp[y * s + x]) last = y; if (last - y <= R) near[y * s + x] = 1; }
+  }
+  for (let i = 0; i < n; i++) if (!near[i]) mask[i] = 0;
+}
+
 // Upscale the low-res mask to the image size with bilinear interpolation.
 function upscaleMask(mask, ms, w, h) {
   const out = new Uint8ClampedArray(w * h);
@@ -210,6 +264,7 @@ async function run({ id, model, device, bitmap, refine }) {
   const outT = results[session.outputNames[0]];
   const raw = outT.data instanceof Float32Array ? outT.data : Float32Array.from(outT.data);
   const mask = toMask8(raw, def);
+  removeIslands(mask, def.size);
   for (const k in results) results[k].dispose?.();
   const t1 = performance.now();
 
