@@ -30,7 +30,7 @@ export class Item {
     this.height = 0;
     this.original = null; // ImageBitmap or canvas
     this.cutout = null; // ImageData RGBA (A = matte)
-    this.cutoutCanvas = null;
+    this._cutoutCanvas = null;
     this.origData = null;
     this.thumb = '';
     this.undoStack = [];
@@ -45,9 +45,26 @@ export class Item {
 
   setCutout(rgbaBuffer, w, h) {
     this.cutout = new ImageData(new Uint8ClampedArray(rgbaBuffer), w, h);
-    this.cutoutCanvas = createCanvas(w, h);
-    this.cutoutCanvas.getContext('2d').putImageData(this.cutout, 0, 0);
+    this._cutoutCanvas = null;
     this._bboxCache = null;
+  }
+
+  // Canvas copy of the cutout for drawing; rebuilt on demand.
+  get cutoutCanvas() {
+    if (!this._cutoutCanvas && this.cutout) {
+      this._cutoutCanvas = createCanvas(this.width, this.height);
+      this._cutoutCanvas.getContext('2d').putImageData(this.cutout, 0, 0);
+    }
+    return this._cutoutCanvas;
+  }
+
+  set cutoutCanvas(v) { this._cutoutCanvas = v; }
+
+  // Free derived buffers while the item is not being viewed.
+  releaseCaches() {
+    this._cutoutCanvas = null;
+    this.origData = null;
+    this._blurCache = null;
   }
 
   getOrigData() {
@@ -64,7 +81,7 @@ export class Item {
     x = Math.max(0, Math.floor(x)); y = Math.max(0, Math.floor(y));
     w = Math.min(this.width - x, Math.ceil(w)); h = Math.min(this.height - y, Math.ceil(h));
     if (w <= 0 || h <= 0) return;
-    this.cutoutCanvas.getContext('2d').putImageData(this.cutout, 0, 0, x, y, w, h);
+    if (this._cutoutCanvas) this._cutoutCanvas.getContext('2d').putImageData(this.cutout, 0, 0, x, y, w, h);
     this._bboxCache = null;
   }
 
@@ -133,9 +150,11 @@ export class Item {
     const out = createCanvas(sw, sh);
     const octx = out.getContext('2d');
     // ctx.filter where supported, plus a downscale for the rest.
+    // Opaque base layer so the blurred edges never turn semi-transparent.
+    octx.drawImage(small, 0, 0, sw, sh);
     octx.filter = `blur(${Math.max(1, radius / f)}px)`;
     // Draw slightly oversized to avoid transparent edges from the blur.
-    const m = radius / f * 2;
+    const m = radius / f * 3.5;
     octx.drawImage(small, -m, -m, sw + 2 * m, sh + 2 * m);
     octx.filter = 'none';
     this._blurCache = { amt, canvas: out };

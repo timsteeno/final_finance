@@ -309,8 +309,12 @@ dialog h2 { margin-top: 0; }
   .tbtn, .seg button, .btn.small { min-height: 40px; }
   .row { min-height: 36px; }
 }
+@media (max-width: 900px) {
+  .toast { bottom: auto; top: 64px; }
+}
 @media (max-width: 480px) {
   .topbar { gap: 8px; }
+  #compare-btn { padding: 0 6px; font-size: 13px; }
   .brand { min-width: 0; overflow: hidden; }
   .brand span:last-child { overflow: hidden; text-overflow: ellipsis; }
   #model-select { max-width: 132px; }

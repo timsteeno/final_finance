@@ -124,6 +124,9 @@ function preprocess(bitmap, def) {
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = 'high';
+  // Transparent input pixels must look like background, not black.
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, s, s);
   ctx.drawImage(bitmap, 0, 0, s, s);
   const px = ctx.getImageData(0, 0, s, s).data;
   const n = s * s;
@@ -167,51 +170,70 @@ function toMask8(data, def) {
   return out;
 }
 
-// Remove small disconnected specks: opaque components smaller than 0.5% of
-// the largest one, plus faint haze farther than R px from any kept component.
-function removeIslands(mask, s) {
+// Remove small disconnected specks. Opaque components (>=128) are dropped if
+// smaller than 0.5% of the largest one (or 0.1% when very confident). Soft
+// pixels survive only if they connect to a kept component through pixels
+// >= LOW (hysteresis, so whiskers and thin structures are kept), plus R px.
+function removeIslands(mask, s, LOW = 32) {
   const n = s * s;
   const label = new Int32Array(n);
   const stack = new Int32Array(n);
-  const sizes = [0];
+  const sizes = [0], sums = [0];
   let cur = 0;
   for (let i = 0; i < n; i++) {
     if (mask[i] < 128 || label[i]) continue;
     cur++;
-    let sp = 0, size = 0;
+    let sp = 0, size = 0, sum = 0;
     stack[sp++] = i; label[i] = cur;
     while (sp) {
       const p = stack[--sp];
-      size++;
+      size++; sum += mask[p];
       const x = p % s, y = (p / s) | 0;
       if (x > 0 && !label[p - 1] && mask[p - 1] >= 128) { label[p - 1] = cur; stack[sp++] = p - 1; }
       if (x < s - 1 && !label[p + 1] && mask[p + 1] >= 128) { label[p + 1] = cur; stack[sp++] = p + 1; }
       if (y > 0 && !label[p - s] && mask[p - s] >= 128) { label[p - s] = cur; stack[sp++] = p - s; }
       if (y < s - 1 && !label[p + s] && mask[p + s] >= 128) { label[p + s] = cur; stack[sp++] = p + s; }
     }
-    sizes.push(size);
+    sizes.push(size); sums.push(sum);
   }
   if (cur === 0) return;
-  const largest = Math.max(...sizes);
-  const min = largest * 0.005;
-  // keep[] = 1 for pixels of kept components
-  const keep = new Uint8Array(n);
+  let largest = 0;
+  for (const z of sizes) if (z > largest) largest = z;
+  const keepLabel = new Uint8Array(cur + 1);
+  for (let l = 1; l <= cur; l++) {
+    const z = sizes[l];
+    keepLabel[l] = z >= largest * 0.005 || (z >= largest * 0.001 && sums[l] / z >= 220) ? 1 : 0;
+  }
+  const reach = new Uint8Array(n);
+  let sp = 0;
   for (let i = 0; i < n; i++) {
     const l = label[i];
-    if (l && sizes[l] >= min) keep[i] = 1;
-    else if (l) mask[i] = 0;
+    if (!l) continue;
+    if (keepLabel[l]) { reach[i] = 1; stack[sp++] = i; } else mask[i] = 0;
   }
-  // dilate keep by R (separable max) and clear soft pixels outside it
+  // grow through soft pixels >= LOW (8-connected)
+  while (sp) {
+    const p = stack[--sp];
+    const x = p % s;
+    for (let dy = -s; dy <= s; dy += s) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if ((dx === -1 && x === 0) || (dx === 1 && x === s - 1)) continue;
+        const q = p + dy + dx;
+        if (q < 0 || q >= n || reach[q] || mask[q] < LOW) continue;
+        reach[q] = 1; stack[sp++] = q;
+      }
+    }
+  }
+  // dilate the reached region by R (separable) and clear everything outside
   const R = Math.max(2, Math.round(s / 160));
-  const tmp = new Uint8Array(n);
+  const tmp = new Uint8Array(n), near = new Uint8Array(n);
   for (let y = 0; y < s; y++) {
-    let last = -1e9;
     const row = y * s;
-    for (let x = 0; x < s; x++) { if (keep[row + x]) last = x; if (x - last <= R) tmp[row + x] = 1; }
+    let last = -1e9;
+    for (let x = 0; x < s; x++) { if (reach[row + x]) last = x; if (x - last <= R) tmp[row + x] = 1; }
     last = 1e9;
-    for (let x = s - 1; x >= 0; x--) { if (keep[row + x]) last = x; if (last - x <= R) tmp[row + x] = 1; }
+    for (let x = s - 1; x >= 0; x--) { if (reach[row + x]) last = x; if (last - x <= R) tmp[row + x] = 1; }
   }
-  const near = new Uint8Array(n);
   for (let x = 0; x < s; x++) {
     let last = -1e9;
     for (let y = 0; y < s; y++) { if (tmp[y * s + x]) last = y; if (y - last <= R) near[y * s + x] = 1; }
@@ -273,15 +295,29 @@ async function run({ id, model, device, bitmap, refine }) {
   const c = makeCanvas(w, h);
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
+  let rgba = ctx.getImageData(0, 0, w, h).data;
+  // Keep the input's own transparency; process its pixels over white so the
+  // full-res guide matches what the model saw.
+  let inA = null;
+  for (let j = 3; j < rgba.length; j += 4) {
+    if (rgba[j] < 255) { inA = true; break; }
+  }
+  if (inA) {
+    inA = new Uint8ClampedArray(w * h);
+    for (let i = 0, j = 3; i < inA.length; i++, j += 4) inA[i] = rgba[j];
+    ctx.fillStyle = '#ffffff';
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillRect(0, 0, w, h);
+    rgba = ctx.getImageData(0, 0, w, h).data;
+  }
   bitmap.close();
-  const img = ctx.getImageData(0, 0, w, h);
-  const rgba = img.data;
   // Edge-aware upsampling guided by the image, plus a contrast curve that
   // snaps near-opaque / near-clear values; plain bilinear when refine is off.
   const alpha = refine
     ? guidedUpscale(mask, def.size, px, rgba, w, h, 2, 1e-4, 0.04, 0.96)
     : upscaleMask(mask, def.size, w, h);
   if (refine) estimateForeground(rgba, alpha, w, h);
+  if (inA) for (let i = 0; i < alpha.length; i++) alpha[i] = (alpha[i] * inA[i]) / 255;
   for (let i = 0, j = 3; i < alpha.length; i++, j += 4) rgba[j] = alpha[i];
   const t2 = performance.now();
   post({
