@@ -11,8 +11,10 @@ after every meaningful step and commit it.
 - Dev sandbox can only reach the npm registry (no CDNs / HuggingFace / GitHub
   downloads). All assets therefore come from npm packages and are vendored
   into `bg-remover/` so the site works offline / on any static host.
-- Repo `timsteeno/final_finance` otherwise holds an unrelated Android app; the
-  tool lives entirely in `bg-remover/`. Branch: `ccr-eb3d823d-jcu3zm`.
+- Originally developed in `timsteeno/final_finance` (branch
+  `ccr-eb3d823d-jcu3zm`, folder `bg-remover/`) by mistake; moving to its own
+  public repo `timsteeno/openbgremove` (folder contents become the repo root).
+  App code relicensed to The Unlicense (public domain) per the owner.
 
 ## Architecture
 - Static site, no build step. Open `index.html` via any static server
