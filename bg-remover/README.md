@@ -22,13 +22,14 @@ canvas limit).
 It is a static site with no build step:
 
 ```sh
-cd bg-remover
 python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-Deploy by copying the `bg-remover/` folder to any static host (GitHub Pages,
-Netlify, Cloudflare Pages, nginx…). `coi-serviceworker.js` enables
+### Free hosting on GitHub Pages
+Settings → Pages → *Deploy from a branch* → `main` / `(root)` → Save. The site
+appears at `https://<user>.github.io/openbgremove/` a minute later. Netlify,
+Cloudflare Pages or any static web server work too — just copy the files. `coi-serviceworker.js` enables
 cross-origin isolation automatically so multi-threaded WASM works even on hosts
 where you can't set COOP/COEP headers. If you can set headers, serve:
 
@@ -39,7 +40,7 @@ Cross-Origin-Embedder-Policy: require-corp
 
 ## Tests
 ```sh
-python3 -m http.server 8765 &      # from bg-remover/
+python3 -m http.server 8765 &
 node tests/smoke.mjs http://localhost:8765/
 ONLY_FAST=1 node tests/e2e.mjs http://localhost:8765/   # full functional suite
 node tests/e2e2.mjs http://localhost:8765/              # regression checks
@@ -49,7 +50,7 @@ node tests/offline.mjs http://localhost:8765/           # offline/PWA check
 ```
 
 ## Licenses
-- App code: MIT (see `LICENSE`)
+- App code: public domain (The Unlicense, see `LICENSE`) — use it for anything, no attribution needed
 - onnxruntime-web: MIT (`licenses/onnxruntime-web-MIT.txt`)
 - coi-serviceworker: MIT (`licenses/coi-serviceworker-MIT.txt`)
 - U²-Netp model: Apache-2.0 (`licenses/Apache-2.0.txt`), via npm `@planby-tech/rmbg-webgpu`
