@@ -19,8 +19,7 @@ const prefs = (() => {
 const state = {
   items: [],
   active: null,
-  // With a GPU the 88 MB fp16 model is fast and gives the cleanest masks.
-  model: MODELS[prefs.get('model')] ? prefs.get('model') : ('gpu' in navigator ? 'best' : DEFAULT_MODEL),
+  model: MODELS[prefs.get('model')] ? prefs.get('model') : DEFAULT_MODEL,
   device: prefs.get('device', 'auto'),
   refine: prefs.get('refine', true),
   format: prefs.get('format', 'png'),
@@ -826,6 +825,16 @@ initModelSelect();
 initPanel();
 initToolbar();
 initInputs();
+
+// With a usable GPU the 88 MB fp16 model is fast and gives the cleanest
+// masks, so make it the default unless the user picked a model.
+if (!MODELS[prefs.get('model')] && navigator.gpu) {
+  navigator.gpu.requestAdapter().then((adapter) => {
+    if (!adapter || prefs.get('model') || state.items.length) return;
+    state.model = 'best';
+    $('#model-select').value = 'best';
+  }).catch(() => {});
+}
 
 // Opened via the share sheet / a ?url= link: load that image.
 {
