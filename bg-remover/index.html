@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Open BG Remover</title>
+  <meta name="description" content="Free, open-source background remover that runs entirely in your browser. No uploads, no accounts, no limits.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%235b5bf7'/%3E%3Cpath d='M9 22l5-7 4 5 3-3 4 5z' fill='white'/%3E%3Ccircle cx='21' cy='11' r='3' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+  <script src="coi-serviceworker.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="Open BG Remover home">
+      <span class="logo" aria-hidden="true"></span>
+      <span>Open&nbsp;BG&nbsp;Remover</span>
+    </a>
+    <div class="topbar-right">
+      <label class="model-pick" title="Model quality">
+        <span class="sr-only">Model</span>
+        <select id="model-select" aria-label="Model quality"></select>
+      </label>
+      <button class="icon-btn" id="about-btn" aria-label="About" title="About">?</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <!-- Landing / empty state -->
+    <section id="landing" class="landing">
+      <div class="hero">
+        <h1>Remove image backgrounds.<br><span class="accent">100% free &amp; private.</span></h1>
+        <p class="lede">Runs entirely in your browser with open-source AI. Your photos never leave your device. No sign-up, no watermarks, full resolution.</p>
+      </div>
+      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload images">
+        <button class="btn primary big" id="upload-btn" type="button">Upload Image</button>
+        <p class="hint">or drop files, paste an image <kbd>Ctrl</kbd>+<kbd>V</kbd>, or</p>
+        <form class="url-form" id="url-form">
+          <input type="url" id="url-input" placeholder="paste an image URL" aria-label="Image URL">
+          <button class="btn" type="submit">Load</button>
+        </form>
+      </div>
+      <div class="samples">
+        <span>No image? Try one of these:</span>
+        <button class="sample" data-src="samples/astronaut.jpg"><img src="samples/astronaut_thumb.jpg" alt="Astronaut portrait sample"></button>
+        <button class="sample" data-src="samples/chelsea.jpg"><img src="samples/chelsea_thumb.jpg" alt="Cat sample"></button>
+        <button class="sample" data-src="samples/coffee.jpg"><img src="samples/coffee_thumb.jpg" alt="Coffee cup sample"></button>
+      </div>
+    </section>
+
+    <!-- Workspace -->
+    <section id="workspace" class="workspace" hidden>
+      <aside class="queue" aria-label="Images">
+        <div class="queue-list" id="queue-list"></div>
+        <div class="queue-actions">
+          <button class="btn small" id="add-btn" type="button" title="Add more images">+ Add</button>
+          <button class="btn small" id="zip-btn" type="button" title="Download all results as ZIP">ZIP all</button>
+        </div>
+      </aside>
+
+      <div class="stage-wrap">
+        <div class="toolbar" role="toolbar" aria-label="View">
+          <div class="seg" role="tablist">
+            <button role="tab" data-view="original" id="view-original">Original</button>
+            <button role="tab" data-view="result" id="view-result" class="on">Removed</button>
+          </div>
+          <button class="tbtn" id="compare-btn" aria-pressed="false" title="Before / after slider (C)">Compare</button>
+          <span class="sep"></span>
+          <button class="tbtn" id="undo-btn" title="Undo (Ctrl+Z)" aria-label="Undo">↶</button>
+          <button class="tbtn" id="redo-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
+          <span class="sep"></span>
+          <button class="tbtn" id="zoom-out" aria-label="Zoom out" title="Zoom out (-)">−</button>
+          <button class="tbtn zoom-label" id="zoom-fit" title="Fit to screen (0)">100%</button>
+          <button class="tbtn" id="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
+        </div>
+        <div class="stage" id="stage">
+          <canvas id="view-canvas"></canvas>
+          <div class="stage-overlay" id="stage-overlay" hidden>
+            <div class="spinner" aria-hidden="true"></div>
+            <div class="overlay-text" id="overlay-text">Working…</div>
+            <div class="progress" id="overlay-progress" hidden><div class="bar" id="overlay-bar"></div></div>
+          </div>
+        </div>
+        <div class="stage-info" id="stage-info"></div>
+      </div>
+
+      <aside class="panel" aria-label="Edit">
+        <details open class="sect" id="sect-download">
+          <summary>Download</summary>
+          <div class="row">
+            <label for="fmt-select">Format</label>
+            <select id="fmt-select">
+              <option value="png">PNG</option>
+              <option value="jpg">JPG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="size-select">Size</label>
+            <select id="size-select">
+              <option value="full">Full resolution</option>
+              <option value="2048">Max 2048 px</option>
+              <option value="1024">Max 1024 px</option>
+              <option value="625">Preview (625 px)</option>
+            </select>
+          </div>
+          <div class="row" id="quality-row" hidden>
+            <label for="quality-range">Quality</label>
+            <input type="range" id="quality-range" min="50" max="100" value="92">
+            <output id="quality-out">92</output>
+          </div>
+          <button class="btn primary full" id="download-btn" type="button">Download</button>
+          <p class="note" id="download-note"></p>
+        </details>
+
+        <details open class="sect" id="sect-bg">
+          <summary>Background</summary>
+          <div class="bg-types" role="radiogroup" aria-label="Background type">
+            <button data-bg="transparent" class="on" role="radio" aria-checked="true">None</button>
+            <button data-bg="color" role="radio" aria-checked="false">Color</button>
+            <button data-bg="image" role="radio" aria-checked="false">Photo</button>
+            <button data-bg="blur" role="radio" aria-checked="false">Blur</button>
+          </div>
+          <div class="bg-sub" id="bg-color-sub" hidden>
+            <div class="swatches" id="swatches"></div>
+            <label class="row"><span>Custom</span><input type="color" id="bg-color" value="#ffffff"></label>
+          </div>
+          <div class="bg-sub" id="bg-image-sub" hidden>
+            <button class="btn small" id="bg-image-btn" type="button">Choose photo…</button>
+            <span class="note" id="bg-image-name"></span>
+          </div>
+          <div class="bg-sub" id="bg-blur-sub" hidden>
+            <label class="row"><span>Blur</span><input type="range" id="bg-blur" min="2" max="100" value="30"></label>
+          </div>
+        </details>
+
+        <details class="sect" id="sect-brush">
+          <summary>Erase / Restore</summary>
+          <div class="seg tools" role="radiogroup" aria-label="Brush tool">
+            <button data-tool="pan" class="on" title="Move (H)">Move</button>
+            <button data-tool="erase" title="Erase (E)">Erase</button>
+            <button data-tool="restore" title="Restore (R)">Restore</button>
+          </div>
+          <label class="row"><span>Brush size</span><input type="range" id="brush-size" min="4" max="300" value="40"><output id="brush-size-out">40</output></label>
+          <label class="row"><span>Hardness</span><input type="range" id="brush-hard" min="0" max="100" value="60"><output id="brush-hard-out">60</output></label>
+          <p class="note">Tip: hold <kbd>Space</kbd> to pan while brushing, <kbd>[</kbd> <kbd>]</kbd> change size, scroll to zoom.</p>
+        </details>
+
+        <details class="sect" id="sect-effects">
+          <summary>Shadow</summary>
+          <label class="row check"><input type="checkbox" id="shadow-on"><span>Drop shadow</span></label>
+          <label class="row"><span>Opacity</span><input type="range" id="shadow-op" min="0" max="100" value="45"></label>
+          <label class="row"><span>Softness</span><input type="range" id="shadow-blur" min="0" max="15" step="0.5" value="3"></label>
+          <label class="row"><span>Offset X</span><input type="range" id="shadow-x" min="-10" max="10" step="0.5" value="0"></label>
+          <label class="row"><span>Offset Y</span><input type="range" id="shadow-y" min="-10" max="10" step="0.5" value="2"></label>
+        </details>
+
+        <details class="sect" id="sect-crop">
+          <summary>Crop</summary>
+          <label class="row check"><input type="checkbox" id="crop-on"><span>Crop to subject</span></label>
+          <label class="row"><span>Margin</span><input type="range" id="crop-pad" min="0" max="40" value="5"><output id="crop-pad-out">5%</output></label>
+        </details>
+
+        <details class="sect" id="sect-advanced">
+          <summary>Advanced</summary>
+          <label class="row check"><input type="checkbox" id="refine-on" checked><span>Clean edge colors</span></label>
+          <label class="row"><span>Processor</span>
+            <select id="device-select">
+              <option value="auto">Auto</option>
+              <option value="gpu">GPU (WebGPU)</option>
+              <option value="cpu">CPU (WASM)</option>
+            </select>
+          </label>
+          <button class="btn small" id="reprocess-btn" type="button">Re-run removal</button>
+          <button class="btn small" id="apply-all-btn" type="button">Apply settings to all</button>
+        </details>
+      </aside>
+    </section>
+  </main>
+
+  <div class="drop-overlay" id="drop-overlay" hidden><div>Drop images to remove their backgrounds</div></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <dialog id="about-dialog">
+    <form method="dialog">
+      <h2>About Open BG Remover</h2>
+      <p>A free, open-source replacement for remove.bg. All processing happens locally in your browser using
+        <a href="https://onnxruntime.ai/" target="_blank" rel="noopener">ONNX Runtime Web</a>; images are never uploaded.</p>
+      <ul>
+        <li><b>Fast</b> — U²-Netp (Apache-2.0), 4.6 MB</li>
+        <li><b>Balanced</b> — ISNet / DIS, 8-bit, 44 MB</li>
+        <li><b>Best</b> — ISNet / DIS, fp16, 88 MB</li>
+      </ul>
+      <p>Models download once and are cached for offline use. See <code>licenses/</code> and the README for details.</p>
+      <p><b>Shortcuts:</b> <kbd>Ctrl</kbd>+<kbd>V</kbd> paste · <kbd>E</kbd> erase · <kbd>R</kbd> restore · <kbd>H</kbd> move · <kbd>[</kbd>/<kbd>]</kbd> brush size · <kbd>C</kbd> compare · <kbd>O</kbd> original · <kbd>0</kbd> fit · <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>Ctrl</kbd>+<kbd>S</kbd> download</p>
+      <div class="dialog-actions"><button class="btn primary">Close</button></div>
+    </form>
+  </dialog>
+
+  <input type="file" id="file-input" accept="image/*" multiple hidden>
+  <input type="file" id="bg-file-input" accept="image/*" hidden>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
