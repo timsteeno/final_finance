@@ -74,6 +74,13 @@
         </div>
         <div class="stage" id="stage">
           <canvas id="view-canvas" tabindex="0" role="img" aria-label="Image preview. Arrow keys pan, plus and minus zoom."></canvas>
+          <div class="stage-tools" id="stage-tools" role="toolbar" aria-label="Brush tools" hidden>
+            <button data-tool="pan" class="on" aria-label="Move">✋</button>
+            <button data-tool="erase" aria-label="Erase">Erase</button>
+            <button data-tool="restore" aria-label="Restore">Restore</button>
+            <input type="range" id="tray-size" min="4" max="200" value="40" aria-label="Brush size">
+            <button id="tray-undo" aria-label="Undo">↶</button>
+          </div>
           <div class="stage-overlay" id="stage-overlay" hidden>
             <div class="spinner" aria-hidden="true"></div>
             <div class="overlay-text" id="overlay-text" role="status" aria-live="polite">Working…</div>
