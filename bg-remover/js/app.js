@@ -29,12 +29,12 @@ const state = {
 };
 
 // ---------- Worker ----------
-const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+let worker = null;
 const pending = new Map();
 let modelProgress = null; // {model, loaded, total}
 const readyModels = new Set();
 
-worker.onmessage = (e) => {
+function onWorkerMessage(e) {
   const m = e.data;
   if (m.type === 'progress') {
     modelProgress = m;
@@ -51,13 +51,31 @@ worker.onmessage = (e) => {
     pending.delete(m.id);
     p && p.reject(new Error(m.message));
   }
-};
-worker.onerror = (e) => {
-  console.error('worker error', e);
-  toast('The processing engine failed to start: ' + (e.message || 'unknown error'), true);
-  for (const p of pending.values()) p.reject(new Error('Worker crashed'));
+}
+
+function startWorker() {
+  worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  worker.onmessage = onWorkerMessage;
+  worker.onerror = (e) => {
+    console.error('worker error', e);
+    toast('The processing engine failed to start: ' + (e.message || 'unknown error'), true);
+    for (const p of pending.values()) p.reject(new Error('Worker crashed'));
+    pending.clear();
+  };
+}
+startWorker();
+
+// Abort the running job by restarting the worker (ORT runs can't be interrupted).
+function cancelProcessing() {
+  worker.terminate();
+  const err = new Error('Cancelled');
+  err.cancelled = true;
+  for (const p of pending.values()) p.reject(err);
   pending.clear();
-};
+  readyModels.clear();
+  modelProgress = null;
+  startWorker();
+}
 
 let reqId = 0;
 function runWorker(item, bitmap) {
@@ -148,16 +166,31 @@ async function addFiles(files) {
 async function addFromUrl(url) {
   url = url.trim();
   if (!url) return;
+  $('#toast').hidden = true;
+  const btn = $('#url-form button');
+  btn.disabled = true;
+  btn.textContent = 'Loading…';
   try {
-    const res = await fetch(url, { mode: 'cors' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
+    let res;
+    try {
+      res = await fetch(url, { mode: 'cors' });
+    } catch {
+      toast("Couldn't download that URL — the site may block cross-origin downloads. Save the image and upload it instead.", true);
+      return;
+    }
+    if (!res.ok) { toast(`The server returned an error (HTTP ${res.status}).`, true); return; }
     const blob = await res.blob();
+    if (blob.type && !blob.type.startsWith('image/')) { toast("That URL isn't an image.", true); return; }
     let name = decodeURIComponent(new URL(url, location.href).pathname.split('/').pop() || 'image');
     if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += '.' + ((blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg'));
     const file = new File([blob], name, { type: blob.type || 'image/png' });
     await addFiles([file]);
+    $('#url-input').value = '';
   } catch (err) {
-    toast("Couldn't load that URL (the site may block cross-origin downloads). Save the image and upload it instead.", true);
+    toast("Couldn't load that URL: " + (err.message || err), true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Load';
   }
 }
 
@@ -169,6 +202,7 @@ async function pump() {
   state.busy = true;
   next.status = 'processing';
   next.stage = 'loading-model';
+  next.startedAt = performance.now();
   renderQueue();
   if (next === state.active) refreshAll();
   try {
@@ -182,12 +216,22 @@ async function pump() {
     next.modelUsed = state.model;
     next.thumb = thumbOf(next);
   } catch (err) {
-    console.error(err);
-    next.status = 'error';
-    next.error = err.message || String(err);
-    if (next === state.active) toast('Background removal failed: ' + next.error, true);
+    if (err.cancelled) {
+      next.status = 'cancelled';
+    } else {
+      console.error(err);
+      next.status = 'error';
+      next.error = err.message || String(err);
+      if (next === state.active) toast('Background removal failed: ' + next.error, true);
+    }
   }
   state.busy = false;
+  if (next.status === 'cancelled') {
+    next.status = 'queued';
+    dropItem(next);
+  } else if (next.status === 'done' && next === state.active) {
+    announce(state.items.some((i) => i.status === 'queued') ? 'Background removed.' : 'Background removed. Press Ctrl+S or Download to save.');
+  }
   renderQueue();
   if (next === state.active) refreshAll();
   pump();
@@ -200,39 +244,45 @@ function renderQueue() {
   for (const item of state.items) {
     const b = document.createElement('div');
     b.className = 'qitem' + (item === state.active ? ' active' : '');
-    b.tabIndex = 0;
-    b.setAttribute('role', 'button');
-    b.setAttribute('aria-label', `${item.name} (${item.status})`);
     b.dataset.id = item.id;
+    const sel = document.createElement('button');
+    sel.className = 'qsel';
+    sel.setAttribute('aria-label', `${item.name} (${item.status})`);
+    if (item === state.active) sel.setAttribute('aria-current', 'true');
+    sel.addEventListener('click', () => selectItem(item));
+    b.append(sel);
     if (item.thumb) {
       const img = document.createElement('img');
       img.src = item.thumb;
       img.alt = '';
-      b.append(img);
+      sel.append(img);
     }
     const badge = document.createElement('span');
     badge.className = 'badge ' + item.status;
     badge.textContent = { queued: 'Queued', processing: '…', done: '✓', error: '!' }[item.status];
-    b.append(badge);
+    sel.append(badge);
     const rm = document.createElement('button');
     rm.className = 'remove';
     rm.textContent = '✕';
-    rm.title = 'Remove from list';
+    rm.title = item.status === 'processing' ? 'Cancel and remove' : 'Remove from list';
     rm.setAttribute('aria-label', 'Remove ' + item.name);
     rm.addEventListener('click', (e) => { e.stopPropagation(); removeItem(item); });
     b.append(rm);
-    b.addEventListener('click', () => selectItem(item));
-    b.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectItem(item); } });
     el.append(b);
   }
   const doneCount = state.items.filter((i) => i.status === 'done').length;
   $('#zip-btn').disabled = doneCount < 1;
-  $('#zip-btn').textContent = doneCount > 1 ? `ZIP all (${doneCount})` : 'ZIP all';
+  $('#zip-btn').textContent = doneCount > 1 ? `ZIP (${doneCount})` : 'ZIP all';
 }
 
 function removeItem(item) {
+  if (item.status === 'processing') { cancelProcessing(); return; } // pump() drops it
+  dropItem(item);
+}
+
+function dropItem(item) {
   const idx = state.items.indexOf(item);
-  if (idx < 0 || item.status === 'processing') return;
+  if (idx < 0) return;
   state.items.splice(idx, 1);
   item.original?.close?.();
   if (state.active === item) {
@@ -264,8 +314,41 @@ function showLanding() {
 function updateOverlay() {
   const item = state.active;
   const ov = $('#stage-overlay');
-  if (!item || (item.status !== 'processing' && item.status !== 'queued' && item.status !== 'error')) { ov.hidden = true; return; }
+  const actions = $('#overlay-actions');
+  const sub = $('#overlay-sub');
+  if (!item || (item.status !== 'processing' && item.status !== 'queued' && item.status !== 'error')) {
+    ov.hidden = true;
+    clearInterval(updateOverlay._timer); updateOverlay._timer = 0;
+    return;
+  }
   ov.hidden = false;
+  const actionKey = item.id + ':' + item.status;
+  if (actions.dataset.key !== actionKey) {
+    actions.dataset.key = actionKey;
+    actions.textContent = '';
+    const mk = (label, fn) => {
+      const b = document.createElement('button');
+      b.className = 'btn small'; b.type = 'button'; b.textContent = label;
+      b.addEventListener('click', fn);
+      actions.append(b);
+    };
+    if (item.status === 'error') {
+      if (item.original) mk('Try again', () => { item.status = 'queued'; item.error = ''; renderQueue(); refreshAll(); pump(); });
+      mk('Remove', () => removeItem(item));
+      mk('Upload another', () => $('#file-input').click());
+    } else {
+      mk('Cancel', () => removeItem(item));
+    }
+  }
+  if (item.status === 'processing' && !updateOverlay._timer) {
+    updateOverlay._timer = setInterval(updateOverlay, 500);
+  }
+  const queue = state.items.filter((i) => i.status === 'queued' || i.status === 'processing' || i.status === 'done');
+  const pos = queue.indexOf(item) + 1;
+  const parts = [];
+  if (state.items.length > 1 && item.status !== 'error') parts.push(`Image ${pos} of ${queue.length}`);
+  if (item.status === 'processing' && item.startedAt) parts.push(`${((performance.now() - item.startedAt) / 1000).toFixed(0)} s`);
+  sub.textContent = parts.join(' · ');
   const spinner = ov.querySelector('.spinner');
   spinner.hidden = item.status === 'error';
   const prog = $('#overlay-progress');
@@ -280,12 +363,14 @@ function updateOverlay() {
         const pct = Math.round((modelProgress.loaded / modelProgress.total) * 100);
         text = `Downloading ${def.label} model (${(def.bytes / 1e6).toFixed(0)} MB, one-time)… ${pct}%`;
         prog.hidden = false;
+        prog.setAttribute('aria-valuenow', pct);
         $('#overlay-bar').style.width = pct + '%';
       } else text = readyModels.has(state.model) ? 'Removing background…' : 'Starting AI engine…';
     } else if (item.stage === 'inference') text = 'Removing background…';
     else if (item.stage === 'refining') text = 'Refining edges…';
   }
-  $('#overlay-text').textContent = text;
+  const ot = $('#overlay-text');
+  if (ot.textContent !== text) ot.textContent = text;
 }
 
 function refreshAll() {
@@ -308,12 +393,15 @@ function syncToolbar() {
   const done = item && item.status === 'done';
   $('#view-original').classList.toggle('on', viewer.view === 'original');
   $('#view-result').classList.toggle('on', viewer.view === 'result');
+  $('#view-original').setAttribute('aria-pressed', String(viewer.view === 'original'));
+  $('#view-result').setAttribute('aria-pressed', String(viewer.view === 'result'));
+  $('#quick-dl-btn').disabled = !done;
   $('#view-result').disabled = !done;
   $('#compare-btn').setAttribute('aria-pressed', String(viewer.compare));
   $('#compare-btn').disabled = !done;
   $('#undo-btn').disabled = !done || !item.undoStack.length;
   $('#redo-btn').disabled = !done || !item.redoStack.length;
-  $('#zoom-fit').textContent = Math.round(viewer.zoom * 100) + '%';
+  $('#zoom-fit').textContent = item && item.width ? Math.round(viewer.displayScale() * 100) + '%' : 'Fit';
 }
 
 function syncPanel() {
@@ -343,9 +431,18 @@ function syncPanel() {
   $('#bg-image-sub').hidden = s.bg.type !== 'image';
   $('#bg-blur-sub').hidden = s.bg.type !== 'blur';
   $('#bg-color').value = s.bg.color;
-  $$('.swatch').forEach((sw) => sw.classList.toggle('on', s.bg.type === 'color' && sw.dataset.color === s.bg.color));
+  $$('.swatch').forEach((sw) => {
+    const on = s.bg.type === 'color' && sw.dataset.color === s.bg.color;
+    sw.classList.toggle('on', on);
+    sw.setAttribute('aria-pressed', String(on));
+  });
   $('#bg-image-name').textContent = s.bg.imageName || 'No photo chosen';
   $('#bg-blur').value = s.bg.blur;
+  $('#bg-blur-out').textContent = s.bg.blur;
+  $('#shadow-op-out').textContent = Math.round(s.shadow.opacity * 100);
+  $('#shadow-blur-out').textContent = s.shadow.blur;
+  $('#shadow-x-out').textContent = s.shadow.x;
+  $('#shadow-y-out').textContent = s.shadow.y;
   $('#shadow-on').checked = s.shadow.enabled;
   $('#shadow-op').value = Math.round(s.shadow.opacity * 100);
   $('#shadow-blur').value = s.shadow.blur;
@@ -356,15 +453,20 @@ function syncPanel() {
   $('#crop-pad').value = s.crop.padding;
   if (done) $('#crop-pad').disabled = !s.crop.enabled;
   $('#crop-pad-out').textContent = s.crop.padding + '%';
-  $$('.tools button').forEach((b) => b.classList.toggle('on', b.dataset.tool === viewer.tool));
+  $$('.tools button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.tool === viewer.tool);
+    b.setAttribute('aria-checked', String(b.dataset.tool === viewer.tool));
+  });
   $('#brush-size').value = viewer.brushSize;
   $('#brush-size-out').textContent = viewer.brushSize;
   $('#brush-hard').value = Math.round(viewer.hardness * 100);
   $('#brush-hard-out').textContent = Math.round(viewer.hardness * 100);
   if (done) {
     const { w, h } = exportSize(item, state.size);
-    $('#download-note').textContent = `${w} × ${h} px · ${FORMATS[state.format].label}` +
-      (state.format === 'jpg' && s.bg.type === 'transparent' ? ' · white background' : '');
+    const bgNote = s.bg.type === 'transparent'
+      ? (state.format === 'jpg' ? 'white background' : 'transparent')
+      : `${{ color: 'color', image: 'photo', blur: 'blurred' }[s.bg.type]} background`;
+    $('#download-note').textContent = `${w} × ${h} px · ${FORMATS[state.format].label} · ${bgNote}`;
   } else $('#download-note').textContent = '';
 }
 
@@ -393,10 +495,11 @@ function saveBlob(blob, name) {
 
 async function downloadActive() {
   const item = state.active;
-  if (!item || item.status !== 'done') return;
+  if (!item || item.status !== 'done') { if (item) toast('Nothing to download yet — the background is still being removed.'); return; }
   const btn = $('#download-btn');
   btn.disabled = true;
   btn.textContent = 'Preparing…';
+  item.downloaded = true;
   try {
     const blob = await exportBlob(item, { format: state.format, size: state.size, quality: state.quality / 100 });
     saveBlob(blob, outputName(item, state.format));
@@ -427,6 +530,9 @@ async function downloadZip() {
     renderQueue();
   }
 }
+
+// Screen-reader announcement (reuses the toast for sighted users).
+function announce(msg) { toast(msg); }
 
 // ---------- Toast ----------
 function toast(msg, error = false) {
@@ -616,6 +722,11 @@ function initInputs() {
     addFiles([new File([blob], b.dataset.src.split('/').pop(), { type: blob.type || 'image/jpeg' })]);
   }));
   $('#zip-btn').addEventListener('click', downloadZip);
+  $('#quick-dl-btn').addEventListener('click', downloadActive);
+  $('#new-btn').addEventListener('click', () => fi.click());
+  window.addEventListener('beforeunload', (e) => {
+    if (state.items.some((i) => i.status === 'done' && !i.downloaded)) { e.preventDefault(); e.returnValue = ''; }
+  });
   $('#about-btn').addEventListener('click', () => $('#about-dialog').showModal());
 
   // Drag & drop anywhere
@@ -651,6 +762,7 @@ function initInputs() {
     if (mod && k === 'y') { e.preventDefault(); redo(); return; }
     if (mod && k === 's') { e.preventDefault(); downloadActive(); return; }
     if (mod || e.altKey) return;
+    if (e.key === 'Escape') { if (viewer.compare) $('#compare-btn').click(); setTool('pan'); return; }
     const done = state.active && state.active.status === 'done';
     if (k === 'e' && done) setTool('erase');
     else if (k === 'r' && done) setTool('restore');

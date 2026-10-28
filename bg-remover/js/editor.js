@@ -94,7 +94,10 @@ export class Item {
     if (!this.settings.crop.enabled) return { x: 0, y: 0, w: this.width, h: this.height };
     const b = this.subjectBBox();
     const pad = Math.round(Math.max(b.w, b.h) * this.settings.crop.padding / 100);
-    return { x: b.x - pad, y: b.y - pad, w: b.w + 2 * pad, h: b.h + 2 * pad };
+    // No margin on sides where the subject is cut off by the photo's edge.
+    const l = b.x <= 1 ? 0 : pad, t = b.y <= 1 ? 0 : pad;
+    const r = b.x + b.w >= this.width - 1 ? 0 : pad, btm = b.y + b.h >= this.height - 1 ? 0 : pad;
+    return { x: b.x - l, y: b.y - t, w: b.w + l + r, h: b.h + t + btm };
   }
 
   blurredBackground() {
@@ -274,7 +277,7 @@ export function composite(ctx, item, deviceScale, { transparentFill = null } = {
 }
 
 export const FORMATS = {
-  png: { mime: 'image/png', ext: 'png', label: 'PNG (transparent)' },
+  png: { mime: 'image/png', ext: 'png', label: 'PNG' },
   jpg: { mime: 'image/jpeg', ext: 'jpg', label: 'JPG' },
   webp: { mime: 'image/webp', ext: 'webp', label: 'WebP' },
 };

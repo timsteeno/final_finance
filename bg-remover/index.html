@@ -31,16 +31,16 @@
         <h1>Remove image backgrounds.<br><span class="accent">100% free &amp; private.</span></h1>
         <p class="lede">Runs entirely in your browser with open-source AI. Your photos never leave your device. No sign-up, no watermarks, full resolution.</p>
       </div>
-      <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload images">
+      <div class="dropzone" id="dropzone">
         <button class="btn primary big" id="upload-btn" type="button">Upload Image</button>
-        <p class="hint">or drop files, paste an image <kbd>Ctrl</kbd>+<kbd>V</kbd>, or</p>
+        <p class="hint">or drop files<span class="paste-hint">, paste an image <kbd>Ctrl</kbd>+<kbd>V</kbd></span>, or</p>
         <form class="url-form" id="url-form">
           <input type="url" id="url-input" placeholder="paste an image URL" aria-label="Image URL">
           <button class="btn" type="submit">Load</button>
         </form>
       </div>
       <div class="samples">
-        <span>No image? Try one of these:</span>
+        <span class="samples-label">No image? Try one of these:</span>
         <button class="sample" data-src="samples/astronaut.jpg"><img src="samples/astronaut_thumb.jpg" alt="Astronaut portrait sample"></button>
         <button class="sample" data-src="samples/chelsea.jpg"><img src="samples/chelsea_thumb.jpg" alt="Cat sample"></button>
         <button class="sample" data-src="samples/coffee.jpg"><img src="samples/coffee_thumb.jpg" alt="Coffee cup sample"></button>
@@ -59,9 +59,9 @@
 
       <div class="stage-wrap">
         <div class="toolbar" role="toolbar" aria-label="View">
-          <div class="seg" role="tablist">
-            <button role="tab" data-view="original" id="view-original">Original</button>
-            <button role="tab" data-view="result" id="view-result" class="on">Removed</button>
+          <div class="seg" role="group" aria-label="Show">
+            <button data-view="original" id="view-original" aria-pressed="false">Original</button>
+            <button data-view="result" id="view-result" class="on" aria-pressed="true">Removed</button>
           </div>
           <button class="tbtn" id="compare-btn" aria-pressed="false" title="Before / after slider (C)">Compare</button>
           <span class="sep"></span>
@@ -69,18 +69,26 @@
           <button class="tbtn" id="redo-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">↷</button>
           <span class="sep"></span>
           <button class="tbtn" id="zoom-out" aria-label="Zoom out" title="Zoom out (-)">−</button>
-          <button class="tbtn zoom-label" id="zoom-fit" title="Fit to screen (0)">100%</button>
+          <button class="tbtn zoom-label" id="zoom-fit" title="Fit to screen (0)" aria-label="Zoom level, click to fit">Fit</button>
           <button class="tbtn" id="zoom-in" aria-label="Zoom in" title="Zoom in (+)">+</button>
         </div>
         <div class="stage" id="stage">
-          <canvas id="view-canvas"></canvas>
+          <canvas id="view-canvas" tabindex="0" role="img" aria-label="Image preview. Arrow keys pan, plus and minus zoom."></canvas>
           <div class="stage-overlay" id="stage-overlay" hidden>
             <div class="spinner" aria-hidden="true"></div>
-            <div class="overlay-text" id="overlay-text">Working…</div>
-            <div class="progress" id="overlay-progress" hidden><div class="bar" id="overlay-bar"></div></div>
+            <div class="overlay-text" id="overlay-text" role="status" aria-live="polite">Working…</div>
+            <div class="overlay-sub" id="overlay-sub"></div>
+            <div class="progress" id="overlay-progress" role="progressbar" aria-label="Model download" aria-valuemin="0" aria-valuemax="100" hidden><div class="bar" id="overlay-bar"></div></div>
+            <div class="overlay-actions" id="overlay-actions"></div>
           </div>
         </div>
-        <div class="stage-info" id="stage-info"></div>
+        <div class="stage-foot">
+          <div class="stage-info" id="stage-info"></div>
+          <div class="foot-actions">
+            <button class="btn small" id="new-btn" type="button" title="Upload another image">+ New image</button>
+            <button class="btn primary" id="quick-dl-btn" type="button" title="Download (Ctrl+S)">Download</button>
+          </div>
+        </div>
       </div>
 
       <aside class="panel" aria-label="Edit">
@@ -129,29 +137,29 @@
             <span class="note" id="bg-image-name"></span>
           </div>
           <div class="bg-sub" id="bg-blur-sub" hidden>
-            <label class="row"><span>Blur</span><input type="range" id="bg-blur" min="2" max="100" value="30"></label>
+            <label class="row"><span>Blur</span><input type="range" id="bg-blur" min="2" max="100" value="30"><output id="bg-blur-out"></output></label>
           </div>
         </details>
 
         <details class="sect" id="sect-brush">
           <summary>Erase / Restore</summary>
           <div class="seg tools" role="radiogroup" aria-label="Brush tool">
-            <button data-tool="pan" class="on" title="Move (H)">Move</button>
-            <button data-tool="erase" title="Erase (E)">Erase</button>
-            <button data-tool="restore" title="Restore (R)">Restore</button>
+            <button data-tool="pan" class="on" title="Move (H)" role="radio" aria-checked="true">Move</button>
+            <button data-tool="erase" title="Erase (E)" role="radio" aria-checked="false">Erase</button>
+            <button data-tool="restore" title="Restore (R)" role="radio" aria-checked="false">Restore</button>
           </div>
           <label class="row"><span>Brush size</span><input type="range" id="brush-size" min="4" max="300" value="40"><output id="brush-size-out">40</output></label>
           <label class="row"><span>Hardness</span><input type="range" id="brush-hard" min="0" max="100" value="60"><output id="brush-hard-out">60</output></label>
-          <p class="note">Tip: hold <kbd>Space</kbd> to pan while brushing, <kbd>[</kbd> <kbd>]</kbd> change size, scroll to zoom.</p>
+          <p class="note">Tip: hold <kbd>Space</kbd> to pan while brushing, <span class="nowrap"><kbd>[</kbd> <kbd>]</kbd></span> change size, scroll or pinch to zoom. Restore shows a faint ghost of the original.</p>
         </details>
 
         <details class="sect" id="sect-effects">
           <summary>Shadow</summary>
           <label class="row check"><input type="checkbox" id="shadow-on"><span>Drop shadow</span></label>
-          <label class="row"><span>Opacity</span><input type="range" id="shadow-op" min="0" max="100" value="45"></label>
-          <label class="row"><span>Softness</span><input type="range" id="shadow-blur" min="0" max="15" step="0.5" value="3"></label>
-          <label class="row"><span>Offset X</span><input type="range" id="shadow-x" min="-10" max="10" step="0.5" value="0"></label>
-          <label class="row"><span>Offset Y</span><input type="range" id="shadow-y" min="-10" max="10" step="0.5" value="2"></label>
+          <label class="row"><span>Opacity</span><input type="range" id="shadow-op" min="0" max="100" value="45"><output id="shadow-op-out"></output></label>
+          <label class="row"><span>Softness</span><input type="range" id="shadow-blur" min="0" max="15" step="0.5" value="3"><output id="shadow-blur-out"></output></label>
+          <label class="row"><span>Offset X</span><input type="range" id="shadow-x" min="-10" max="10" step="0.5" value="0"><output id="shadow-x-out"></output></label>
+          <label class="row"><span>Offset Y</span><input type="range" id="shadow-y" min="-10" max="10" step="0.5" value="2"><output id="shadow-y-out"></output></label>
         </details>
 
         <details class="sect" id="sect-crop">
