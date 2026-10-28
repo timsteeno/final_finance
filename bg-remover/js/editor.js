@@ -268,7 +268,14 @@ export function composite(ctx, item, deviceScale, { transparentFill = null } = {
   ctx.rect(rect.x, rect.y, rect.w, rect.h);
   ctx.clip();
   if (s.bg.type === 'color') {
-    ctx.fillStyle = s.bg.color;
+    // "#aaaaaa>#bbbbbb" means a diagonal two-stop gradient
+    const stops = s.bg.color.split('>');
+    if (stops.length === 2) {
+      const g = ctx.createLinearGradient(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+      g.addColorStop(0, stops[0]);
+      g.addColorStop(1, stops[1]);
+      ctx.fillStyle = g;
+    } else ctx.fillStyle = s.bg.color;
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
   } else if (s.bg.type === 'image' && s.bg.image) {
     drawCover(ctx, s.bg.image, rect.x, rect.y, rect.w, rect.h);

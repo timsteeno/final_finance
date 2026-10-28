@@ -432,7 +432,7 @@ function syncPanel() {
   $('#bg-color-sub').hidden = s.bg.type !== 'color';
   $('#bg-image-sub').hidden = s.bg.type !== 'image';
   $('#bg-blur-sub').hidden = s.bg.type !== 'blur';
-  $('#bg-color').value = s.bg.color;
+  if (/^#[0-9a-f]{6}$/i.test(s.bg.color)) $('#bg-color').value = s.bg.color;
   $$('.swatch').forEach((sw) => {
     const on = s.bg.type === 'color' && sw.dataset.color === s.bg.color;
     sw.classList.toggle('on', on);
@@ -587,17 +587,20 @@ function initModelSelect() {
 }
 
 const SWATCHES = ['#ffffff', '#000000', '#f2f2f2', '#ff5a5f', '#ffb400', '#3ddc97', '#00a6fb', '#7b61ff',
-  '#ffe3e3', '#fff3c4', '#d3f9d8', '#d0ebff', '#e5dbff', '#2b2d42', '#8d99ae', '#ff8fab'];
+  '#ffe3e3', '#fff3c4', '#d3f9d8', '#d0ebff', '#e5dbff', '#2b2d42', '#8d99ae', '#ff8fab',
+  '#fdfbfb>#ebedee', '#a1c4fd>#c2e9fb', '#ffecd2>#fcb69f', '#84fab0>#8fd3f4',
+  '#fbc2eb>#a6c1ee', '#f6d365>#fda085', '#667eea>#764ba2', '#232526>#414345'];
 
 function initPanel() {
   const sw = $('#swatches');
   for (const c of SWATCHES) {
     const b = document.createElement('button');
     b.className = 'swatch';
-    b.style.background = c;
+    const st = c.split('>');
+    b.style.background = st.length === 2 ? `linear-gradient(135deg, ${st[0]}, ${st[1]})` : c;
     b.dataset.color = c;
-    b.title = c;
-    b.setAttribute('aria-label', 'Background color ' + c);
+    b.title = c.replace('>', ' → ');
+    b.setAttribute('aria-label', (c.includes('>') ? 'Gradient background ' : 'Background color ') + c.replace('>', ' to '));
     b.addEventListener('click', () => {
       const s = state.active.settings.bg;
       s.type = 'color'; s.color = c;

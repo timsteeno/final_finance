@@ -320,7 +320,7 @@ await check('size option never upscales small image (625 on 512px)', async () =>
 await check('background: colour swatch fills transparent area', async () => {
   await page.click('.bg-types [data-bg="color"]');
   assert(await page.isVisible('#bg-color-sub'), 'colour sub-panel visible');
-  assert((await page.$$('.swatch')).length === 16, 'swatch count');
+  assert((await page.$$('.swatch')).length === 24, 'swatch count');
   await page.click('.swatch[data-color="#ff5a5f"]');
   assert(await page.getAttribute('.bg-types [data-bg="color"]', 'aria-checked') === 'true', 'aria-checked');
   assert(await S(() => document.querySelector('.swatch[data-color="#ff5a5f"]').classList.contains('on')), 'swatch marked on');
@@ -328,6 +328,14 @@ await check('background: colour swatch fills transparent area', async () => {
   const [tl] = r.pts;
   assert(tl[0] === 255 && Math.abs(tl[1] - 90) < 3 && Math.abs(tl[2] - 95) < 3 && tl[3] === 255, 'corner ' + tl);
   assert(r.transparentFrac === 0, 'no transparent px');
+});
+
+await check('background: gradient swatch differs between corners', async () => {
+  await page.click('.swatch[data-color="#667eea>#764ba2"]');
+  const r = await exportActive(CORNERS);
+  const tl = r.pts[0], br = r.pts[1]; // top-left vs top-right corner
+  assert(tl[3] === 255 && br[3] === 255, 'opaque');
+  assert(Math.abs(tl[0] - br[0]) + Math.abs(tl[1] - br[1]) > 20, `corners differ ${tl} vs ${br}`);
 });
 
 await check('background: custom colour input', async () => {
