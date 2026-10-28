@@ -82,6 +82,12 @@ export class Viewer {
   }
 
   render() {
+    const brush = this._brushActive();
+    const c = this.canvas;
+    c.classList.toggle('brush', !!brush);
+    c.classList.toggle('grab', !brush && !!this.item && this.zoom > 1);
+    // Let one-finger swipes scroll the page when there is nothing to pan.
+    c.parentElement.style.touchAction = !brush && this.zoom <= 1 && !this.compare ? 'pan-y' : 'none';
     if (this._raf) return;
     this._raf = requestAnimationFrame(() => { this._raf = 0; this._draw(); });
   }
@@ -105,6 +111,12 @@ export class Viewer {
       ctx.fillRect(0, 0, rect.w * s, rect.h * s);
       ctx.restore();
       ctx.setTransform(s, 0, 0, s, ox, oy);
+      if (this.tool === 'restore') {
+        // faint ghost of the original so removed areas are visible
+        ctx.globalAlpha = 0.3;
+        ctx.drawImage(item.original, 0, 0, item.width, item.height);
+        ctx.globalAlpha = 1;
+      }
       composite(ctx, item, s);
       if (this.compare) {
         const sx = this.split * canvas.width;
@@ -117,10 +129,12 @@ export class Viewer {
         ctx.drawImage(item.original, 0, 0, item.width, item.height);
         ctx.restore();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
+        const top = Math.max(0, rect.y * s + oy), bot = Math.min(canvas.height, (rect.y + rect.h) * s + oy);
+        const midY = (top + bot) / 2;
         ctx.fillStyle = '#fff';
-        ctx.fillRect(sx - 1 * this._dpr, 0, 2 * this._dpr, canvas.height);
+        ctx.fillRect(sx - 1 * this._dpr, top, 2 * this._dpr, bot - top);
         ctx.beginPath();
-        ctx.arc(sx, canvas.height / 2, 16 * this._dpr, 0, Math.PI * 2);
+        ctx.arc(sx, midY, 16 * this._dpr, 0, Math.PI * 2);
         ctx.fillStyle = '#fff';
         ctx.shadowColor = 'rgba(0,0,0,.35)';
         ctx.shadowBlur = 6 * this._dpr;
@@ -130,7 +144,7 @@ export class Viewer {
         ctx.font = `${12 * this._dpr}px system-ui, sans-serif`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('⟷', sx, canvas.height / 2);
+        ctx.fillText('⟷', sx, midY);
       }
     } else {
       ctx.setTransform(s, 0, 0, s, ox, oy);
@@ -143,11 +157,11 @@ export class Viewer {
       const r = (this.brushSize / 2) * this._dpr;
       ctx.beginPath();
       ctx.arc(this._cursor.x, this._cursor.y, r, 0, Math.PI * 2);
-      ctx.lineWidth = 2 * this._dpr;
-      ctx.strokeStyle = 'rgba(0,0,0,.6)';
+      ctx.lineWidth = 3 * this._dpr;
+      ctx.strokeStyle = 'rgba(0,0,0,.75)';
       ctx.stroke();
-      ctx.lineWidth = 1 * this._dpr;
-      ctx.strokeStyle = this.tool === 'erase' ? '#ff5a6e' : '#3ddc97';
+      ctx.lineWidth = 1.5 * this._dpr;
+      ctx.strokeStyle = this.tool === 'erase' ? '#ff7a8a' : '#5df0b0';
       ctx.stroke();
       if (this.hardness < 0.95) {
         ctx.beginPath();
@@ -174,6 +188,12 @@ export class Viewer {
     this.zoom = z;
     this.render();
     this.onChange('zoom');
+  }
+
+  // Actual on-screen scale relative to the image's pixels (1 = 100%).
+  displayScale() {
+    if (!this.item || !this.item.width) return 1;
+    return this._transform().s / this._dpr;
   }
 
   resetView() {
@@ -238,6 +258,7 @@ export class Viewer {
       } else {
         this._mode = 'pan';
         this._panStart = { x: e.clientX, y: e.clientY, panX: this.panX, panY: this.panY };
+        c.classList.add('grabbing');
       }
     });
     c.addEventListener('pointermove', (e) => {
@@ -249,9 +270,11 @@ export class Viewer {
         const d = Math.hypot(p1.x - p2.x, p1.y - p2.y);
         const z = Math.min(32, Math.max(0.1, this._pinch.zoom * d / this._pinch.d));
         const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
+        const b2 = c.getBoundingClientRect(), cx = b2.left + b2.width / 2, cy = b2.top + b2.height / 2;
+        const k = z / this._pinch.zoom;
         this.zoom = z;
-        this.panX = this._pinch.panX * (z / this._pinch.zoom) + (mx - this._pinch.mx);
-        this.panY = this._pinch.panY * (z / this._pinch.zoom) + (my - this._pinch.my);
+        this.panX = (mx - cx) - ((this._pinch.mx - cx) - this._pinch.panX) * k;
+        this.panY = (my - cy) - ((this._pinch.my - cy) - this._pinch.panY) * k;
         this.onChange('zoom');
       } else if (this._mode === 'brush') {
         this._strokeTo(e.clientX, e.clientY);
@@ -268,6 +291,7 @@ export class Viewer {
       this._pointers.delete(e.pointerId);
       if (this._mode === 'brush') this._finishStroke();
       if (this._pointers.size === 0) this._mode = null;
+      c.classList.remove('grabbing');
     };
     c.addEventListener('pointerup', end);
     c.addEventListener('pointercancel', end);
@@ -278,6 +302,21 @@ export class Viewer {
       const f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
       this.setZoom(this.zoom * f, e.clientX, e.clientY);
     }, { passive: false });
+    c.addEventListener('keydown', (e) => {
+      if (!this.item || e.ctrlKey || e.metaKey || e.altKey) return;
+      const step = e.shiftKey ? 100 : 30;
+      const k = e.key;
+      if (this.compare && (k === 'ArrowLeft' || k === 'ArrowRight')) {
+        this.split = Math.min(1, Math.max(0, this.split + (k === 'ArrowLeft' ? -0.05 : 0.05)));
+      } else if (k === 'ArrowLeft') this.panX += step;
+      else if (k === 'ArrowRight') this.panX -= step;
+      else if (k === 'ArrowUp') this.panY += step;
+      else if (k === 'ArrowDown') this.panY -= step;
+      else return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.render();
+    });
     window.addEventListener('keydown', (e) => { if (e.code === 'Space' && e.target === document.body) { this._space = true; e.preventDefault(); } });
     window.addEventListener('keyup', (e) => { if (e.code === 'Space') this._space = false; });
   }
