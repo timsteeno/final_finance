@@ -163,9 +163,22 @@
         </details>
 
         <details class="sect" id="sect-crop">
-          <summary>Crop</summary>
+          <summary>Crop &amp; canvas</summary>
           <label class="row check"><input type="checkbox" id="crop-on"><span>Crop to subject</span></label>
           <label class="row"><span>Margin</span><input type="range" id="crop-pad" min="0" max="40" value="5"><output id="crop-pad-out">5%</output></label>
+          <label class="row"><span>Canvas</span>
+            <select id="crop-aspect">
+              <option value="original">Original ratio</option>
+              <option value="1:1">Square 1:1</option>
+              <option value="4:5">Portrait 4:5 (Instagram)</option>
+              <option value="3:4">Portrait 3:4</option>
+              <option value="9:16">Story 9:16</option>
+              <option value="16:9">Landscape 16:9</option>
+              <option value="4:3">Landscape 4:3</option>
+              <option value="35:45">Passport 35×45 mm</option>
+              <option value="2:2">US passport 2×2 in</option>
+            </select>
+          </label>
         </details>
 
         <details class="sect" id="sect-advanced">

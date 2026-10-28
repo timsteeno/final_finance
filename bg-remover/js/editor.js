@@ -9,7 +9,7 @@ export function defaultSettings() {
   return {
     bg: { type: 'transparent', color: '#ffffff', image: null, imageName: '', blur: 30 },
     shadow: { enabled: false, opacity: 0.45, blur: 3, x: 0, y: 2 },
-    crop: { enabled: false, padding: 5 },
+    crop: { enabled: false, padding: 5, aspect: 'original' },
   };
 }
 
@@ -91,6 +91,24 @@ export class Item {
 
   // Output rectangle in image coordinates (crop may extend past the image).
   outputRect() {
+    const r = this._baseRect();
+    const asp = this.settings.crop.aspect;
+    if (!asp || asp === 'original') return r;
+    // Grow the short side so the canvas has the requested aspect ratio.
+    const [aw, ah] = asp.split(':').map(Number);
+    const target = aw / ah;
+    if (r.w / r.h < target) {
+      const w = Math.round(r.h * target);
+      return { x: r.x - Math.round((w - r.w) / 2), y: r.y, w, h: r.h };
+    }
+    const h = Math.round(r.w / target);
+    // Keep subjects cut off at the bottom anchored there (portraits).
+    const b = this.settings.crop.enabled ? this.subjectBBox() : null;
+    const anchorBottom = b && b.y + b.h >= this.height - 1;
+    return { x: r.x, y: anchorBottom ? r.y + r.h - h : r.y - Math.round((h - r.h) / 2), w: r.w, h };
+  }
+
+  _baseRect() {
     if (!this.settings.crop.enabled) return { x: 0, y: 0, w: this.width, h: this.height };
     const b = this.subjectBBox();
     const pad = Math.round(Math.max(b.w, b.h) * this.settings.crop.padding / 100);
