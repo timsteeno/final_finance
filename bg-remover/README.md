@@ -15,7 +15,8 @@ canvas limit).
 - Backgrounds: transparent, colour (presets + picker), your own photo, blurred original
 - Drop shadow, crop-to-subject with margin
 - Export PNG / JPG / WebP at full or reduced size; batch “ZIP all”
-- Models cached for offline use after the first download
+- Installable PWA that works fully offline after the first visit (app shell + models cached)
+- Share-target / `?url=` link support to open an image directly
 
 ## Run it
 It is a static site with no build step:
@@ -40,6 +41,9 @@ Cross-Origin-Embedder-Policy: require-corp
 ```sh
 python3 -m http.server 8765 &      # from bg-remover/
 node tests/smoke.mjs http://localhost:8765/
+ONLY_FAST=1 node tests/e2e.mjs http://localhost:8765/   # full functional suite
+node tests/e2e2.mjs http://localhost:8765/              # regression checks
+node tests/offline.mjs http://localhost:8765/           # offline/PWA check
 ```
 
 ## Licenses

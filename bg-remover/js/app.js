@@ -827,5 +827,12 @@ initPanel();
 initToolbar();
 initInputs();
 
+// Opened via the share sheet / a ?url= link: load that image.
+{
+  const q = new URLSearchParams(location.search);
+  const shared = q.get('url') || (q.get('text') || '').match(/https?:\/\/\S+/)?.[0];
+  if (shared) addFromUrl(shared);
+}
+
 // Small test/debug hook
 window.__obr = { state, viewer, addFiles };

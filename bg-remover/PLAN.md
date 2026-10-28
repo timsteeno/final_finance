@@ -98,3 +98,5 @@ createRequire, see tests/smoke.mjs).
 - NEXT ideas: drag/scale photo backgrounds; brush size in image px option;
   PWA manifest for install/offline; i18n; round-3 agent testing on real-world
   photo categories (products, cars, hair, animals, graphics/logos).
+- 2026-10-28: PWA: manifest + icon, coi-serviceworker extended with network-first
+  shell cache; ?url= / share-target loading. tests/offline.mjs passes.
