@@ -82,7 +82,8 @@ export class Item {
     w = Math.min(this.width - x, Math.ceil(w)); h = Math.min(this.height - y, Math.ceil(h));
     if (w <= 0 || h <= 0) return;
     if (this._cutoutCanvas) this._cutoutCanvas.getContext('2d').putImageData(this.cutout, 0, 0, x, y, w, h);
-    this._bboxCache = null;
+    // Keep the crop box (and so the view) fixed while a stroke is in progress.
+    if (!this._stroke) this._bboxCache = null;
   }
 
   // Bounding box of visible subject pixels.
@@ -215,7 +216,8 @@ export class Item {
           const na = pristine * (1 - wgt);
           if (na < d[i + 3]) d[i + 3] = na;
         } else {
-          const na = pristine + (255 - pristine) * wgt;
+          // never exceed the input image's own alpha
+          const na = pristine + (orig[i + 3] - pristine) * wgt;
           if (na > d[i + 3]) {
             d[i + 3] = na;
             d[i] = orig[i]; d[i + 1] = orig[i + 1]; d[i + 2] = orig[i + 2];
@@ -229,6 +231,7 @@ export class Item {
   endStroke() {
     const s = this._stroke;
     this._stroke = null;
+    this._bboxCache = null;
     if (!s || s.tiles.size === 0) return false;
     this.undoStack.push([...s.tiles.values()]);
     if (this.undoStack.length > 40) this.undoStack.shift();
@@ -335,7 +338,7 @@ export function exportSize(item, size) {
   }
   // Keep within canvas limits.
   const px = rect.w * rect.h * scale * scale;
-  if (px > MAX_PIXELS * 1.5) scale *= Math.sqrt((MAX_PIXELS * 1.5) / px);
+  if (px > MAX_PIXELS) scale *= Math.sqrt(MAX_PIXELS / px);
   return { w: Math.max(1, Math.round(rect.w * scale)), h: Math.max(1, Math.round(rect.h * scale)), scale, rect };
 }
 
@@ -352,7 +355,12 @@ export async function exportBlob(item, { format = 'png', size = 'full', quality 
   return blob;
 }
 
+// Strip path separators and reserved characters so names can't escape a folder.
+export function safeName(name) {
+  return String(name).replace(/[\/\\:*?"<>|\x00-\x1f]/g, '_').replace(/^[.\s]+/, '') || 'image';
+}
+
 export function outputName(item, format) {
-  const base = item.name.replace(/\.[^.]+$/, '') || 'image';
+  const base = safeName(item.name.replace(/\.[^.]+$/, ''));
   return `${base}-no-bg.${FORMATS[format].ext}`;
 }

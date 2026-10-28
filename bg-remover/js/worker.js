@@ -20,19 +20,29 @@ function post(msg, transfer) {
   self.postMessage(msg, transfer || []);
 }
 
-async function fetchWithProgress(url, onBytes) {
-  let cache = null;
-  try { cache = await caches.open(CACHE_NAME); } catch { /* Cache API unavailable */ }
+async function openCache() {
+  try { return await caches.open(CACHE_NAME); } catch { return null; } // Cache API unavailable
+}
+
+async function evictModel(def) {
+  const cache = await openCache();
+  if (cache) for (const f of def.files) await cache.delete(BASE + f).catch(() => {});
+}
+
+async function fetchWithProgress(url, onBytes, cache) {
   if (cache) {
     const hit = await cache.match(url);
     if (hit) {
       const buf = await hit.arrayBuffer();
       onBytes(buf.byteLength);
-      return buf;
+      return { buf, cached: true };
     }
   }
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download ${url} (HTTP ${res.status})`);
+  if (/text\/html/i.test(res.headers.get('content-type') || '')) {
+    throw new Error(`The server returned a web page instead of the model file ${url}. Check that the models/ folder was deployed.`);
+  }
   let buf;
   if (res.body && res.body.getReader) {
     const reader = res.body.getReader();
@@ -53,10 +63,7 @@ async function fetchWithProgress(url, onBytes) {
     buf = await res.arrayBuffer();
     onBytes(buf.byteLength);
   }
-  if (cache) {
-    try { await cache.put(url, new Response(buf.slice(0))); } catch { /* quota */ }
-  }
-  return buf;
+  return { buf, cached: false };
 }
 
 async function loadModelBytes(model) {
@@ -66,10 +73,23 @@ async function loadModelBytes(model) {
     loaded += n;
     post({ type: 'progress', model, loaded, total: def.bytes });
   };
-  const bufs = [];
-  for (const f of def.files) bufs.push(await fetchWithProgress(BASE + f, report));
-  if (bufs.length === 1) return new Uint8Array(bufs[0]);
+  const cache = await openCache();
+  const parts = [];
+  for (const f of def.files) parts.push(await fetchWithProgress(BASE + f, report, cache));
+  const bufs = parts.map((p) => p.buf);
   const total = bufs.reduce((s, b) => s + b.byteLength, 0);
+  if (total !== def.bytes) {
+    await evictModel(def);
+    throw new Error(`Model download is incomplete or corrupt (${total} of ${def.bytes} bytes). Please try again.`);
+  }
+  // Only cache once the whole model has the expected size.
+  if (cache) {
+    for (let i = 0; i < parts.length; i++) {
+      if (parts[i].cached) continue;
+      try { await cache.put(BASE + def.files[i], new Response(bufs[i].slice(0))); } catch { /* quota */ }
+    }
+  }
+  if (bufs.length === 1) return new Uint8Array(bufs[0]);
   const out = new Uint8Array(total);
   let o = 0;
   for (const b of bufs) { out.set(new Uint8Array(b), o); o += b.byteLength; }
@@ -102,10 +122,17 @@ function getSession(model, device) {
           console.warn('WebGPU session failed, falling back to WASM', e);
         }
       }
-      const session = await ort.InferenceSession.create(bytes, {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'all',
-      });
+      let session;
+      try {
+        session = await ort.InferenceSession.create(bytes, {
+          executionProviders: ['wasm'],
+          graphOptimizationLevel: 'all',
+        });
+      } catch (e) {
+        // Unparseable bytes must not stay cached forever.
+        await evictModel(def);
+        throw e;
+      }
       return { session, backend: 'wasm' + (ort.env.wasm.numThreads > 1 ? ` x${ort.env.wasm.numThreads}` : '') };
     })();
     p.catch(() => sessions.delete(key));
@@ -325,6 +352,14 @@ async function run({ id, model, device, bitmap, refine }) {
     timings: { inference: Math.round(t1 - t0), refine: Math.round(t2 - t1) },
   }, [rgba.buffer]);
 }
+
+// Tell the page the script loaded (and whether this browser can run it).
+self.postMessage({
+  type: 'hello',
+  unsupported: typeof OffscreenCanvas === 'undefined' || !new OffscreenCanvas(1, 1).getContext('2d')
+    ? 'This browser is too old to run the background-removal engine (needs OffscreenCanvas in workers, e.g. Safari 16.4+).'
+    : '',
+});
 
 self.onmessage = async (e) => {
   const msg = e.data;

@@ -100,3 +100,14 @@ createRequire, see tests/smoke.mjs).
   photo categories (products, cars, hair, animals, graphics/logos).
 - 2026-10-28: PWA: manifest + icon, coi-serviceworker extended with network-first
   shell cache; ?url= / share-target loading. tests/offline.mjs passes.
+- 2026-10-28: Round-3 code review (tests/e2e3.mjs, 9 checks). Fixed: filename
+  sanitising (zip-slip via ?url=), worker respawn loop (hello handshake +
+  unsupported-browser message), corrupt model bytes cached forever (size check,
+  html check, evict on parse failure), crop view shifting mid-stroke, restore
+  over input-transparent pixels, ZIP double-run / items changing mid-ZIP,
+  stroke + item switch, malformed % in URL, export cap 16 MP, SW waitUntil +
+  no-cache revalidation + query-less navigation keys, small leaks.
+  All suites pass: e2e 56/56, e2e2 9/9, e2e3 9/9, offline OK.
+- NEXT: memory "hibernation" for inactive items (encode cutout to PNG blob,
+  close original; re-decode on select/export) so 20-40 photo batches work on
+  phones; decode lazily so pump() starts before all files are decoded.

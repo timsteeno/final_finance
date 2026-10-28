@@ -32,8 +32,9 @@ export function makeZip(files) {
   let offset = 0;
   const used = new Set();
   for (const f of files) {
-    let name = f.name;
-    for (let i = 2; used.has(name); i++) name = f.name.replace(/(\.[^.]*)?$/, ` (${i})$1`);
+    let name = String(f.name).replace(/[\\:*?"<>|\x00-\x1f]/g, '_').split('/').filter((p) => p && p !== '.' && p !== '..').join('_') || 'file';
+    const base = name;
+    for (let i = 2; used.has(name); i++) name = base.replace(/(\.[^.]*)?$/, ` (${i})$1`);
     used.add(name);
     const nameBytes = enc.encode(name);
     const crc = crc32(f.data);
