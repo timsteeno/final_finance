@@ -1,4 +1,5 @@
 /*! coi-serviceworker v0.1.7 - Guido Zuidhof and contributors, licensed under MIT */
+/* Modified for Open BG Remover: network-first offline cache of the app shell. */
 let coepCredentialless = false;
 if (typeof window === 'undefined') {
     self.addEventListener("install", () => self.skipWaiting());
@@ -21,6 +22,25 @@ if (typeof window === 'undefined') {
         }
     });
 
+    const SHELL_CACHE = "obr-shell-v1";
+    // Network first; fall back to the cached copy when offline. Model files
+    // are cached separately by the inference worker, so they are skipped here.
+    const fetchWithOffline = (request) => {
+        const url = new URL(request.url);
+        const cacheable = request.method === "GET" && url.origin === self.location.origin &&
+            !/\.onnx(\.part\d+)?$/.test(url.pathname);
+        if (!cacheable) return fetch(request);
+        return fetch(request).then((response) => {
+            if (response.ok && response.type === "basic") {
+                const copy = response.clone();
+                caches.open(SHELL_CACHE).then((c) => c.put(request, copy)).catch(() => {});
+            }
+            return response;
+        }).catch((err) => caches.open(SHELL_CACHE)
+            .then((c) => c.match(request, { ignoreSearch: true }))
+            .then((hit) => hit || Promise.reject(err)));
+    };
+
     self.addEventListener("fetch", function (event) {
         const r = event.request;
         if (r.cache === "only-if-cached" && r.mode !== "same-origin") {
@@ -33,7 +53,7 @@ if (typeof window === 'undefined') {
             })
             : r;
         event.respondWith(
-            fetch(request)
+            fetchWithOffline(request)
                 .then((response) => {
                     if (response.status === 0) {
                         return response;
