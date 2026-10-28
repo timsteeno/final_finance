@@ -57,6 +57,7 @@ export class Viewer {
     this.canvas.style.height = h + 'px';
     this._pattern = checkerPattern(this.ctx, Math.round(10 * dpr));
     this.render();
+    queueMicrotask(() => this.onChange('zoom'));
   }
 
   // Transform from image coords to canvas device px.
@@ -67,7 +68,7 @@ export class Viewer {
       : item.outputRect();
     const cw = this.canvas.width, ch = this.canvas.height;
     const margin = 24 * this._dpr;
-    const fit = Math.min((cw - 2 * margin) / rect.w, (ch - 2 * margin) / rect.h);
+    const fit = Math.max(1e-3, Math.min((cw - 2 * margin) / rect.w, (ch - 2 * margin) / rect.h));
     const s = fit * this.zoom;
     const ox = cw / 2 - (rect.x + rect.w / 2) * s + this.panX * this._dpr;
     const oy = ch / 2 - (rect.y + rect.h / 2) * s + this.panY * this._dpr;
@@ -187,7 +188,7 @@ export class Viewer {
     }
     this.zoom = z;
     this.render();
-    this.onChange('zoom');
+    queueMicrotask(() => this.onChange('zoom'));
   }
 
   // Actual on-screen scale relative to the image's pixels (1 = 100%).
@@ -199,7 +200,7 @@ export class Viewer {
   resetView() {
     this.zoom = 1; this.panX = 0; this.panY = 0;
     this.render();
-    this.onChange('zoom');
+    queueMicrotask(() => this.onChange('zoom'));
   }
 
   _brushActive() {

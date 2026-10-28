@@ -19,7 +19,8 @@ const prefs = (() => {
 const state = {
   items: [],
   active: null,
-  model: MODELS[prefs.get('model')] ? prefs.get('model') : DEFAULT_MODEL,
+  // With a GPU the 88 MB fp16 model is fast and gives the cleanest masks.
+  model: MODELS[prefs.get('model')] ? prefs.get('model') : ('gpu' in navigator ? 'best' : DEFAULT_MODEL),
   device: prefs.get('device', 'auto'),
   refine: prefs.get('refine', true),
   format: prefs.get('format', 'png'),
@@ -61,6 +62,10 @@ function startWorker() {
     toast('The processing engine failed to start: ' + (e.message || 'unknown error'), true);
     for (const p of pending.values()) p.reject(new Error('Worker crashed'));
     pending.clear();
+    // Start a fresh engine so later jobs don't hang.
+    worker.terminate();
+    readyModels.clear();
+    startWorker();
   };
 }
 startWorker();
@@ -81,8 +86,10 @@ let reqId = 0;
 function runWorker(item, bitmap) {
   const id = ++reqId;
   return new Promise((resolve, reject) => {
-    pending.set(id, { resolve, reject, item, model: state.model });
-    worker.postMessage({ type: 'run', id, model: state.model, device: state.device, bitmap, refine: state.refine }, [bitmap]);
+    const model = state.model;
+    item.modelRunning = model;
+    pending.set(id, { resolve: (r) => resolve({ ...r, model }), reject, item, model });
+    worker.postMessage({ type: 'run', id, model, device: state.device, bitmap, refine: state.refine }, [bitmap]);
   });
 }
 
@@ -98,7 +105,14 @@ async function decode(blob) {
       const img = new Image();
       img.src = url;
       await img.decode();
-      bmp = await createImageBitmap(img);
+      if (!img.naturalWidth || !img.naturalHeight || /svg/i.test(blob.type)) {
+        // SVGs: rasterise at a useful size (viewBox-only SVGs have no intrinsic size)
+        const nw = img.naturalWidth || 1024, nh = img.naturalHeight || 1024;
+        const sc = Math.max(1, 2048 / Math.max(nw, nh));
+        const c = createCanvas(Math.round(nw * sc), Math.round(nh * sc));
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        bmp = await createImageBitmap(c);
+      } else bmp = await createImageBitmap(img);
     } finally { URL.revokeObjectURL(url); }
   }
   let downscaled = false;
@@ -213,8 +227,9 @@ async function pump() {
     next.backend = r.backend;
     next.timings = { ...r.timings, total: Math.round(performance.now() - t0) };
     next.status = 'done';
-    next.modelUsed = state.model;
+    next.modelUsed = r.model;
     next.thumb = thumbOf(next);
+    if (next !== state.active) next.releaseCaches();
   } catch (err) {
     if (err.cancelled) {
       next.status = 'cancelled';
@@ -296,6 +311,7 @@ function dropItem(item) {
 }
 
 function selectItem(item) {
+  if (state.active && state.active !== item) state.active.releaseCaches();
   state.active = item;
   viewer.setItem(item);
   renderQueue();
@@ -360,14 +376,15 @@ function updateOverlay() {
   else if (!item.original) text = 'Reading image…';
   else if (item.status === 'processing') {
     if (item.stage === 'loading-model') {
-      const def = MODELS[state.model];
-      if (modelProgress && modelProgress.model === state.model && modelProgress.loaded < modelProgress.total) {
+      const running = item.modelRunning || state.model;
+      const def = MODELS[running];
+      if (modelProgress && modelProgress.model === running && modelProgress.loaded < modelProgress.total) {
         const pct = Math.round((modelProgress.loaded / modelProgress.total) * 100);
         text = `Downloading ${def.label} model (${(def.bytes / 1e6).toFixed(0)} MB, one-time)… ${pct}%`;
         prog.hidden = false;
         prog.setAttribute('aria-valuenow', pct);
         $('#overlay-bar').style.width = pct + '%';
-      } else text = readyModels.has(state.model) ? 'Removing background…' : 'Starting AI engine…';
+      } else text = readyModels.has(running) ? 'Removing background…' : 'Starting AI engine…';
     } else if (item.stage === 'inference') text = 'Removing background…';
     else if (item.stage === 'refining') text = 'Refining edges…';
   }
@@ -503,11 +520,15 @@ function saveBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(a.href), 30000);
 }
 
+let downloading = false;
 async function downloadActive() {
+  if (downloading) return;
   const item = state.active;
   if (!item || item.status !== 'done') { if (item) toast('Nothing to download yet — the background is still being removed.'); return; }
   const btn = $('#download-btn');
+  downloading = true;
   btn.disabled = true;
+  $('#quick-dl-btn').disabled = true;
   btn.textContent = 'Preparing…';
   item.downloaded = true;
   try {
@@ -516,7 +537,9 @@ async function downloadActive() {
   } catch (err) {
     toast(err.message, true);
   } finally {
+    downloading = false;
     btn.disabled = false;
+    $('#quick-dl-btn').disabled = false;
     btn.textContent = 'Download';
   }
 }
@@ -532,6 +555,7 @@ async function downloadZip() {
       btn.textContent = `${i + 1}/${done.length}…`;
       const blob = await exportBlob(done[i], { format: state.format, size: state.size, quality: state.quality / 100 });
       files.push({ name: outputName(done[i], state.format), data: new Uint8Array(await blob.arrayBuffer()) });
+      if (done[i] !== state.active) done[i].releaseCaches();
     }
     saveBlob(makeZip(files), 'background-removed.zip');
   } catch (err) {
@@ -675,7 +699,7 @@ function initPanel() {
         bg: { ...src.bg }, shadow: { ...src.shadow }, crop: { ...src.crop },
       };
       it._blurCache = null;
-      if (it.status === 'done') it.thumb = thumbOf(it);
+      if (it.status === 'done') { it.thumb = thumbOf(it); it.releaseCaches(); }
     }
     renderQueue();
     toast('Settings applied to all images.');

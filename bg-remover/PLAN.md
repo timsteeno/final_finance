@@ -87,3 +87,14 @@ createRequire, see tests/smoke.mjs).
 - NEXT ideas: small-island removal for Fast model; mobile bottom tool tray;
   drag/scale photo backgrounds; aspect-ratio canvas presets; gradient bgs;
   brush size in image px option; second round of agent testing.
+- 2026-10-28: Round-2 bug hunt (tests/e2e2.mjs, 9 checks). Fixed: removeIslands
+  now uses hysteresis (keeps whiskers/thin structures), input alpha preserved
+  (and processed over white), model label after mid-run switch, negative zoom
+  label, viewBox-only SVG, semi-transparent blur edges, double download,
+  worker auto-restart on crash, memory (inactive items release canvases),
+  mobile toast placement. Default model = Best when WebGPU exists.
+  Added: mobile floating brush tray, gradient backgrounds, aspect presets.
+  e2e 56/56, e2e2 9/9.
+- NEXT ideas: drag/scale photo backgrounds; brush size in image px option;
+  PWA manifest for install/offline; i18n; round-3 agent testing on real-world
+  photo categories (products, cars, hair, animals, graphics/logos).
