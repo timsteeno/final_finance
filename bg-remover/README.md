@@ -43,6 +43,8 @@ python3 -m http.server 8765 &      # from bg-remover/
 node tests/smoke.mjs http://localhost:8765/
 ONLY_FAST=1 node tests/e2e.mjs http://localhost:8765/   # full functional suite
 node tests/e2e2.mjs http://localhost:8765/              # regression checks
+node tests/e2e3.mjs http://localhost:8765/              # review regressions
+node tests/e2e4.mjs http://localhost:8765/              # memory / hibernation
 node tests/offline.mjs http://localhost:8765/           # offline/PWA check
 ```
 

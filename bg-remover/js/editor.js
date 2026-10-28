@@ -31,6 +31,7 @@ export class Item {
     this.original = null; // ImageBitmap or canvas
     this.cutout = null; // ImageData RGBA (A = matte)
     this._cutoutCanvas = null;
+    this.cutoutBlob = null; // PNG copy of the cutout while hibernated
     this.origData = null;
     this.thumb = '';
     this.undoStack = [];
@@ -46,6 +47,7 @@ export class Item {
   setCutout(rgbaBuffer, w, h) {
     this.cutout = new ImageData(new Uint8ClampedArray(rgbaBuffer), w, h);
     this._cutoutCanvas = null;
+    this.cutoutBlob = null;
     this._bboxCache = null;
   }
 
@@ -233,6 +235,7 @@ export class Item {
     this._stroke = null;
     this._bboxCache = null;
     if (!s || s.tiles.size === 0) return false;
+    this.cutoutBlob = null; // edited: hibernation copy is stale
     this.undoStack.push([...s.tiles.values()]);
     if (this.undoStack.length > 40) this.undoStack.shift();
     this.redoStack = [];
@@ -240,6 +243,7 @@ export class Item {
   }
 
   _swapTiles(tiles) {
+    this.cutoutBlob = null;
     const d = this.cutout.data;
     const out = [];
     for (const t of tiles) {

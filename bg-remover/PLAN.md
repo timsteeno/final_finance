@@ -108,6 +108,10 @@ createRequire, see tests/smoke.mjs).
   stroke + item switch, malformed % in URL, export cap 16 MP, SW waitUntil +
   no-cache revalidation + query-less navigation keys, small leaks.
   All suites pass: e2e 56/56, e2e2 9/9, e2e3 9/9, offline OK.
-- NEXT: memory "hibernation" for inactive items (encode cutout to PNG blob,
-  close original; re-decode on select/export) so 20-40 photo batches work on
-  phones; decode lazily so pump() starts before all files are decoded.
+- 2026-10-28: Memory hibernation done: inactive items keep the cutout as a
+  PNG blob and drop decoded bitmaps; wake() re-decodes on select/ZIP/apply-all;
+  queued items decode on demand and processing starts after the first decode.
+  tests/e2e4.mjs (hibernation, 10 x 6 MP batch) passes; all suites green.
+- NEXT ideas: drag/scale photo backgrounds; brush size in image px option;
+  i18n; more agent rounds on real-world photo categories when test photos
+  are available.
