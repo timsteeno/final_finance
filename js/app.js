@@ -230,7 +230,7 @@ async function pump() {
     next.status = 'queued';
     dropItem(next);
   } else if (next.status === 'done' && next === state.active) {
-    announce(state.items.some((i) => i.status === 'queued') ? 'Background removed.' : 'Background removed. Press Ctrl+S or Download to save.');
+    announce(state.items.some((i) => i.status === 'queued') ? 'Background removed.' : (matchMedia('(pointer: coarse)').matches ? 'Background removed. Tap Download to save.' : 'Background removed. Press Ctrl+S or Download to save.'));
   }
   renderQueue();
   if (next === state.active) refreshAll();
@@ -456,6 +456,13 @@ function syncPanel() {
   if (done) $('#crop-pad').disabled = !s.crop.enabled;
   $('#crop-pad-out').textContent = s.crop.padding + '%';
   $('#crop-aspect').value = s.crop.aspect || 'original';
+  $('#stage-tools').hidden = !done;
+  $('#tray-size').value = Math.min(200, viewer.brushSize);
+  $('#tray-undo').disabled = !done || !item.undoStack.length;
+  $$('.stage-tools [data-tool]').forEach((b) => {
+    b.classList.toggle('on', b.dataset.tool === viewer.tool);
+    b.setAttribute('aria-pressed', String(b.dataset.tool === viewer.tool));
+  });
   $$('.tools button').forEach((b) => {
     b.classList.toggle('on', b.dataset.tool === viewer.tool);
     b.setAttribute('aria-checked', String(b.dataset.tool === viewer.tool));
@@ -623,7 +630,9 @@ function initPanel() {
   });
   $('#bg-blur').addEventListener('input', (e) => { state.active.settings.bg.blur = +e.target.value; settingsChanged(); });
 
-  $$('.tools button').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool)));
+  $$('.tools button, .stage-tools [data-tool]').forEach((b) => b.addEventListener('click', () => setTool(b.dataset.tool, { fromTray: !!b.closest('.stage-tools') })));
+  $('#tray-size').addEventListener('input', (e) => { viewer.brushSize = +e.target.value; syncPanel(); });
+  $('#tray-undo').addEventListener('click', () => undo());
   $('#brush-size').addEventListener('input', (e) => { viewer.brushSize = +e.target.value; $('#brush-size-out').textContent = viewer.brushSize; });
   $('#brush-hard').addEventListener('input', (e) => { viewer.hardness = +e.target.value / 100; $('#brush-hard-out').textContent = e.target.value; });
 
@@ -670,12 +679,12 @@ function initPanel() {
   });
 }
 
-function setTool(tool) {
+function setTool(tool, { fromTray = false } = {}) {
   viewer.tool = tool;
   if (tool !== 'pan') {
     viewer.view = 'result';
     viewer.compare = false;
-    $('#sect-brush').open = true;
+    if (!fromTray) $('#sect-brush').open = true;
   }
   syncPanel();
   syncToolbar();
