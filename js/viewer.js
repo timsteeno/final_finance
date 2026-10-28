@@ -38,8 +38,14 @@ export class Viewer {
     this._bind();
   }
 
+  get stroking() { return this._mode === 'brush'; }
+
   setItem(item) {
     if (this.item !== item) {
+      if (this._mode === 'brush') this._finishStroke();
+      this._mode = null;
+      this._last = null;
+      this._pointers.clear();
       this.item = item;
       this.zoom = 1; this.panX = 0; this.panY = 0;
     }
@@ -325,6 +331,7 @@ export class Viewer {
   _finishStroke() {
     this._mode = null;
     this._last = null;
-    if (this.item.endStroke()) this.onChange('edit');
+    const item = this.item;
+    if (item.endStroke()) this.onChange('edit', item);
   }
 }

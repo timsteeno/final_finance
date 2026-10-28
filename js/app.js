@@ -1,5 +1,5 @@
 import { MODELS, DEFAULT_MODEL } from './models.js';
-import { Item, MAX_PIXELS, composite, createCanvas, exportBlob, exportSize, outputName, FORMATS } from './editor.js';
+import { Item, MAX_PIXELS, composite, createCanvas, exportBlob, exportSize, outputName, safeName, FORMATS } from './editor.js';
 import { Viewer } from './viewer.js';
 import { makeZip } from './zip.js';
 
@@ -53,19 +53,41 @@ function onWorkerMessage(e) {
   }
 }
 
+let engineBroken = false;
 function startWorker() {
-  worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-  worker.onmessage = onWorkerMessage;
-  worker.onerror = (e) => {
+  const w = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+  let alive = false; // set once the worker script has loaded and said hello
+  w.onmessage = (e) => {
+    if (e.data && e.data.type === 'hello') {
+      alive = true;
+      if (e.data.unsupported) failEngine(e.data.unsupported);
+      return;
+    }
+    onWorkerMessage(e);
+  };
+  w.onerror = (e) => {
     console.error('worker error', e);
-    toast('The processing engine failed to start: ' + (e.message || 'unknown error'), true);
+    if (w !== worker) return;
     for (const p of pending.values()) p.reject(new Error('Worker crashed'));
     pending.clear();
-    // Start a fresh engine so later jobs don't hang.
-    worker.terminate();
+    w.terminate();
     readyModels.clear();
-    startWorker();
+    if (alive) {
+      // It had been working: start a fresh engine so later jobs don't hang.
+      toast('The processing engine crashed and was restarted.', true);
+      startWorker();
+    } else {
+      failEngine("This browser can't run the background-removal engine (module workers are required). Please use a recent Chrome, Edge, Firefox or Safari.");
+    }
   };
+  worker = w;
+}
+
+function failEngine(msg) {
+  engineBroken = msg;
+  for (const p of pending.values()) p.reject(new Error(msg));
+  pending.clear();
+  toast(msg, true);
 }
 startWorker();
 
@@ -161,6 +183,7 @@ async function addFiles(files) {
   for (const item of added) {
     try {
       const { bmp, downscaled } = await decode(item.file);
+      if (!state.items.includes(item)) { bmp.close(); continue; } // removed meanwhile
       item.original = bmp;
       item.width = bmp.width;
       item.height = bmp.height;
@@ -194,7 +217,10 @@ async function addFromUrl(url) {
     if (!res.ok) { toast(`The server returned an error (HTTP ${res.status}).`, true); return; }
     const blob = await res.blob();
     if (blob.type && !blob.type.startsWith('image/')) { toast("That URL isn't an image.", true); return; }
-    let name = decodeURIComponent(new URL(url, location.href).pathname.split('/').pop() || 'image');
+    const seg = new URL(url, location.href).pathname.split('/').pop() || 'image';
+    let name;
+    try { name = decodeURIComponent(seg); } catch { name = seg; }
+    name = safeName(name);
     if (!/\.[a-z0-9]{2,5}$/i.test(name)) name += '.' + ((blob.type.split('/')[1] || 'png').replace('jpeg', 'jpg'));
     const file = new File([blob], name, { type: blob.type || 'image/png' });
     await addFiles([file]);
@@ -219,7 +245,9 @@ async function pump() {
   renderQueue();
   if (next === state.active) refreshAll();
   try {
+    if (engineBroken) throw new Error(engineBroken);
     const clone = await createImageBitmap(next.original);
+    if (next.cancelRequested) { const e = new Error('Cancelled'); e.cancelled = true; clone.close(); throw e; }
     const t0 = performance.now();
     const r = await runWorker(next, clone);
     next.setCutout(r.rgba, r.width, r.height);
@@ -285,12 +313,17 @@ function renderQueue() {
     el.append(b);
   }
   const doneCount = state.items.filter((i) => i.status === 'done').length;
-  $('#zip-btn').disabled = doneCount < 1;
-  $('#zip-btn').textContent = doneCount > 1 ? `ZIP (${doneCount})` : 'ZIP all';
+  $('#zip-btn').disabled = zipping || doneCount < 1;
+  if (!zipping) $('#zip-btn').textContent = doneCount > 1 ? `ZIP (${doneCount})` : 'ZIP all';
 }
 
 function removeItem(item) {
-  if (item.status === 'processing') { cancelProcessing(); return; } // pump() drops it
+  if (item.status === 'processing') {
+    // pump() drops it; the flag covers the moment before the job is registered
+    item.cancelRequested = true;
+    cancelProcessing();
+    return;
+  }
   dropItem(item);
 }
 
@@ -429,7 +462,7 @@ function syncPanel() {
     if (el.closest('#sect-advanced') && el.id !== 'reprocess-btn' && el.id !== 'apply-all-btn') return;
     el.disabled = !done;
   });
-  $('#reprocess-btn').disabled = !item || !item.original || item.status === 'processing' || item.status === 'queued';
+  $('#reprocess-btn').disabled = zipping || !item || !item.original || item.status === 'processing' || item.status === 'queued';
   $('#apply-all-btn').disabled = !done || state.items.length < 2;
   $('#fmt-select').value = state.format;
   $('#size-select').value = state.size;
@@ -504,7 +537,11 @@ function settingsChanged({ thumb = true } = {}) {
   syncPanel();
   if (thumb && item.status === 'done') {
     clearTimeout(settingsChanged._t);
-    settingsChanged._t = setTimeout(() => { item.thumb = thumbOf(item); renderQueue(); }, 250);
+    settingsChanged._t = setTimeout(() => {
+      if (item !== state.active || item.status !== 'done') return;
+      item.thumb = thumbOf(item);
+      renderQueue();
+    }, 250);
   }
 }
 
@@ -543,24 +580,35 @@ async function downloadActive() {
   }
 }
 
+let zipping = false;
 async function downloadZip() {
+  if (zipping) return;
   const done = state.items.filter((i) => i.status === 'done');
   if (!done.length) return;
   const btn = $('#zip-btn');
+  zipping = true;
   btn.disabled = true;
+  syncPanel();
   const files = [];
   try {
     for (let i = 0; i < done.length; i++) {
       btn.textContent = `${i + 1}/${done.length}…`;
+      // Skip items removed or re-run since the ZIP started.
+      if (done[i].status !== 'done' || !done[i].cutout || !state.items.includes(done[i])) continue;
       const blob = await exportBlob(done[i], { format: state.format, size: state.size, quality: state.quality / 100 });
       files.push({ name: outputName(done[i], state.format), data: new Uint8Array(await blob.arrayBuffer()) });
       if (done[i] !== state.active) done[i].releaseCaches();
     }
-    saveBlob(makeZip(files), 'background-removed.zip');
+    if (files.length) {
+      saveBlob(makeZip(files), 'background-removed.zip');
+      done.forEach((i) => { i.downloaded = true; });
+    }
   } catch (err) {
     toast(err.message, true);
   } finally {
+    zipping = false;
     renderQueue();
+    syncPanel();
   }
 }
 
@@ -579,10 +627,11 @@ function toast(msg, error = false) {
 
 // ---------- Wiring ----------
 const viewer = new Viewer($('#view-canvas'), {
-  onChange: (what) => {
+  onChange: (what, edited) => {
     syncToolbar();
-    if (what === 'edit' && state.active) {
-      state.active.thumb = thumbOf(state.active);
+    if (what === 'edit' && edited && edited.cutout && edited.original) {
+      edited.thumb = thumbOf(edited);
+      if (edited !== state.active) edited.releaseCaches();
       renderQueue();
       syncPanel();
     }
@@ -650,7 +699,10 @@ function initPanel() {
     try {
       const { bmp } = await decode(f);
       const s = state.active.settings.bg;
+      const old = s.image;
       s.type = 'image'; s.image = bmp; s.imageName = f.name;
+      // Free the previous photo unless "Apply to all" shared it with another item.
+      if (old && !state.items.some((it) => it.settings.bg.image === old)) old.close?.();
       settingsChanged();
     } catch { toast('Could not read that background image.', true); }
   });
@@ -681,7 +733,7 @@ function initPanel() {
   $('#device-select').addEventListener('change', (e) => { state.device = e.target.value; prefs.set('device', state.device); });
   $('#reprocess-btn').addEventListener('click', () => {
     const item = state.active;
-    if (!item || !item.original || item.status === 'processing') return;
+    if (zipping || !item || !item.original || item.status === 'processing') return;
     item.status = 'queued';
     item.cutout = null; item.cutoutCanvas = null;
     item.undoStack = []; item.redoStack = [];
@@ -738,10 +790,12 @@ function initToolbar() {
 }
 
 function undo() {
+  if (viewer.stroking) return;
   const it = state.active;
   if (it && it.status === 'done' && it.undo()) { viewer.render(); it.thumb = thumbOf(it); renderQueue(); refreshAll(); }
 }
 function redo() {
+  if (viewer.stroking) return;
   const it = state.active;
   if (it && it.status === 'done' && it.redo()) { viewer.render(); it.thumb = thumbOf(it); renderQueue(); refreshAll(); }
 }

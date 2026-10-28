@@ -25,19 +25,24 @@ if (typeof window === 'undefined') {
     const SHELL_CACHE = "obr-shell-v1";
     // Network first; fall back to the cached copy when offline. Model files
     // are cached separately by the inference worker, so they are skipped here.
-    const fetchWithOffline = (request) => {
+    const fetchWithOffline = (request, event) => {
         const url = new URL(request.url);
         const cacheable = request.method === "GET" && url.origin === self.location.origin &&
             !/\.onnx(\.part\d+)?$/.test(url.pathname);
         if (!cacheable) return fetch(request);
-        return fetch(request).then((response) => {
-            if (response.ok && response.type === "basic") {
+        // Navigations are stored without their query (?url=...) to avoid one
+        // entry per shared link; other files revalidate so versions don't mix.
+        const key = request.mode === "navigate" ? url.origin + url.pathname : request;
+        const live = request.mode === "navigate" ? fetch(request) : fetch(request, { cache: "no-cache" });
+        return live.then((response) => {
+            if (response.ok && response.type === "basic" && response.status === 200) {
                 const copy = response.clone();
-                caches.open(SHELL_CACHE).then((c) => c.put(request, copy)).catch(() => {});
+                const put = caches.open(SHELL_CACHE).then((c) => c.put(key, copy)).catch(() => {});
+                if (event) event.waitUntil(put);
             }
             return response;
         }).catch((err) => caches.open(SHELL_CACHE)
-            .then((c) => c.match(request, { ignoreSearch: true }))
+            .then((c) => c.match(key, { ignoreSearch: true }))
             .then((hit) => hit || Promise.reject(err)));
     };
 
@@ -53,7 +58,7 @@ if (typeof window === 'undefined') {
             })
             : r;
         event.respondWith(
-            fetchWithOffline(request)
+            fetchWithOffline(request, event)
                 .then((response) => {
                     if (response.status === 0) {
                         return response;
