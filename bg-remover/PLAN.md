@@ -73,3 +73,9 @@ after every meaningful step and commit it.
     node tests/smoke.mjs http://localhost:8765/
 Playwright is preinstalled globally in the dev container (require via
 createRequire, see tests/smoke.mjs).
+- 2026-10-28: UX sub-agent review done; applied fixes (mobile overflow, sticky
+  download footer, cancel/timer, error actions, a11y roles, contrast, pinch
+  anchor, restore ghost, crop edge margin). Committed.
+  Pending: E2E agent report, quality agent report. Remaining UX ideas not yet
+  done: mobile bottom tool tray for brushing, drag/scale photo backgrounds,
+  aspect-ratio canvas presets, gradient backgrounds.
